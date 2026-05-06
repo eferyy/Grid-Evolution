@@ -12,7 +12,7 @@ Grid Evolution, 2048 türevi minimalist ve karanlık temalı bir bulmaca oyunudu
 - **Package name (Android)**: `com.dinzdp.gridevolution`
 - **Bundle ID (iOS)**: `com.dinzdp.gridevolution`
 - **Version**: `1.0.2`
-- **versionCode / buildNumber**: `2`
+- **versionCode / buildNumber**: `3`
 - **App name**: `Grid Evolution`
 - **Primary color**: `#6366F1`
 - **Background / theme**: `#121212` (dark)
