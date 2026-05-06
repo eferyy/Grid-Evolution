@@ -37,6 +37,7 @@ Uygulama **hiçbir izin istemez** (kullanıcı seçimi: offline, izinsiz). `andr
 - ✅ Adaptive icon (foreground + background) + splash screen
 - ✅ WebView hardware accelerated layer, cache enabled
 - ✅ Tüm oyun verileri cihazda localStorage (IndexedDB) içinde tutulur
+- ✅ **In-App Review prompt**: yüksek skor 50'yi geçtiğinde bir kez (`expo-store-review`) native Play Store rating pop-up'ı, fallback olarak `market://details?id=com.dinzdp.gridevolution` deep link.
 
 ## Store Assets (hazırlandı)
 - `assets/images/icon.png` — 1024×1024 masked icon

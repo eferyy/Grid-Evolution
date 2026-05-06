@@ -12,7 +12,14 @@ import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import * as StoreReview from 'expo-store-review';
+import { Linking } from 'react-native';
 import { GAME_HTML_B64 } from '../src/gameHtmlLoader';
+
+// Play Store package id — kept in sync with app.json android.package.
+const ANDROID_PACKAGE_ID = 'com.dinzdp.gridevolution';
+// Score threshold above which we ask for an in-app rating (one time only).
+const RATING_HIGH_SCORE_THRESHOLD = 50;
 
 // Pure-JS base64 decoder that works in React Native (no atob/Buffer needed).
 const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -48,17 +55,39 @@ const GAME_HTML: string = decodeBase64Html(GAME_HTML_B64);
 // - Forwards Android back-button presses from RN to the game (via postMessage).
 // - Routes haptic feedback through React Native (more reliable than navigator.vibrate on Android WebView).
 // - Prevents default touch gestures (pinch zoom, pull to refresh).
+// - Watches localStorage 'grid-evo-highscore-pastel' and asks RN for a Play Store review prompt
+//   the first time the high score crosses RATING_HIGH_SCORE_THRESHOLD (one-shot, persisted).
 const INJECTED_JS = `
 (function() {
   try {
+    var REVIEW_THRESHOLD = ${RATING_HIGH_SCORE_THRESHOLD};
+    var REVIEW_KEY = 'grid-evo-review-asked';
+    var HS_KEY = 'grid-evo-highscore-pastel';
+
+    function rnPost(payload) {
+      try {
+        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+          window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+        }
+      } catch (e) {}
+    }
+
+    function maybeAskReview() {
+      try {
+        if (localStorage.getItem(REVIEW_KEY) === '1') return;
+        var hs = parseInt(localStorage.getItem(HS_KEY) || '0', 10);
+        if (!isNaN(hs) && hs >= REVIEW_THRESHOLD) {
+          localStorage.setItem(REVIEW_KEY, '1');
+          // Slight delay so the user finishes celebrating their score.
+          setTimeout(function() { rnPost({ type: 'requestReview' }); }, 1500);
+        }
+      } catch (e) {}
+    }
+
     // Expose a bridge so the game can route vibrations through RN.
     var origVibrate = navigator.vibrate ? navigator.vibrate.bind(navigator) : null;
     navigator.vibrate = function(pattern) {
-      try {
-        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'haptic', pattern: pattern }));
-        }
-      } catch (e) {}
+      try { rnPost({ type: 'haptic', pattern: pattern }); } catch (e) {}
       if (origVibrate) { try { origVibrate(pattern); } catch(e) {} }
       return true;
     };
@@ -77,16 +106,24 @@ const INJECTED_JS = `
       } catch(e) {}
     }
 
+    // Patch localStorage.setItem to detect high-score updates synchronously.
+    try {
+      var origSet = localStorage.setItem.bind(localStorage);
+      localStorage.setItem = function(k, v) {
+        var r = origSet(k, v);
+        if (k === HS_KEY) maybeAskReview();
+        return r;
+      };
+    } catch(e) {}
+
     // Prevent pinch-zoom.
     document.addEventListener('gesturestart', function(e){ e.preventDefault(); }, { passive: false });
 
     // Tell RN the game is ready.
     window.addEventListener('load', function() {
-      try {
-        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
-        }
-      } catch(e) {}
+      rnPost({ type: 'ready' });
+      // Also evaluate once on load in case the high score was already above threshold previously.
+      maybeAskReview();
     });
   } catch(e) {}
 })();
@@ -145,6 +182,26 @@ export default function Index() {
           await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         } else if (intensity > 0) {
           await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }
+      } else if (data.type === 'requestReview') {
+        // Triggered by the in-WebView script when the high score first crosses
+        // RATING_HIGH_SCORE_THRESHOLD. Prefer the in-app review prompt; fall back
+        // to opening the Play Store listing.
+        try {
+          const available =
+            (await StoreReview.isAvailableAsync?.()) === true &&
+            (await StoreReview.hasAction?.()) === true;
+          if (available) {
+            await StoreReview.requestReview();
+          } else if (Platform.OS === 'android') {
+            await Linking.openURL(`market://details?id=${ANDROID_PACKAGE_ID}`).catch(() =>
+              Linking.openURL(
+                `https://play.google.com/store/apps/details?id=${ANDROID_PACKAGE_ID}`
+              )
+            );
+          }
+        } catch {
+          // Ignore — never block the game on a review prompt failure.
         }
       }
     } catch (err) {
