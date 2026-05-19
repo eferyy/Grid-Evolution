@@ -1,0 +1,24 @@
+<svg width="108" height="108" viewBox="0 0 108 108" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Safe Zone: 72x72 (Starts at 18, ends at 90) -->
+  <g transform="translate(18, 18)">
+    
+    <!-- Passive Grid Slots -->
+    <rect x="0" y="0" width="32" height="32" rx="10" fill="#1e1e1e" />
+    <rect x="40" y="0" width="32" height="32" rx="10" fill="#1e1e1e" />
+    <rect x="0" y="40" width="32" height="32" rx="10" fill="#1e1e1e" />
+    <rect x="40" y="40" width="32" height="32" rx="10" fill="#1e1e1e" />
+
+    <!-- Active Block (Pastel Green) -->
+    <rect x="0" y="40" width="32" height="32" rx="10" fill="#DCEDC8" />
+    
+    <!-- Merging Blocks (Pastel Blue) - Stretching vertically to represent Fusion -->
+    <path d="M40 10 C 40 4.477 44.477 0 50 0 L 62 0 C 67.523 0 72 4.477 72 10 L 72 62 C 72 67.523 67.523 72 62 72 L 50 72 C 44.477 72 40 67.523 40 62 L 40 10 Z" fill="#B2EBF2" />
+    
+    <!-- Highlight / Fusion Pop Effect (Spring scale representation) -->
+    <rect x="36" y="28" width="40" height="40" rx="14" fill="#80DEEA" opacity="0.95" />
+    
+    <!-- Subtle Inner Glow on the fused block -->
+    <rect x="40" y="32" width="32" height="32" rx="10" fill="#E0F7FA" opacity="0.6" />
+    
+  </g>
+</svg>

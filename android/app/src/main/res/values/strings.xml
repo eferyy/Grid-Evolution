@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Grid Evolution</string>
+    <string name="title_activity_main">Grid Evolution</string>
+    <string name="package_name">com.dinzdp.gridevolution</string>
+    <string name="custom_url_scheme">com.dinzdp.gridevolution</string>
+</resources>
