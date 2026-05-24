@@ -26,9 +26,15 @@ body {
   content-visibility: auto;
 }
 
+@supports not (content-visibility: auto) {
+  .content-visibility-auto {
+    content-visibility: visible;
+  }
+}
+
 @keyframes confetti-fall {
   0% { transform: translateY(-10px) rotate(0deg); opacity: 1; }
-  100% { transform: translateY(100dvh) rotate(720deg); opacity: 0; }
+  100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
 }
 
 .confetti {

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Base application theme. -->
     <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
@@ -13,10 +13,20 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- Force opaque gray navigation bar — prevents transparent camouflage on old tablets/Custom ROMs -->
+        <item name="android:navigationBarColor">#1E1E1E</item>
+        <item name="android:statusBarColor">#1E1E1E</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o">false</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 
-
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <!-- Logoyu tamamen siler ve düz koyu gri yapar -->
+        <item name="android:windowBackground">#1E1E1E</item>
+        <!-- Ensure nav/status bars are solid gray during splash too -->
+        <item name="android:navigationBarColor">#1E1E1E</item>
+        <item name="android:statusBarColor">#1E1E1E</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o">false</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

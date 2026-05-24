@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, memo, useMemo } from 'react';
-import { RotateCcw, Undo2, Hammer, Shuffle, Share2, Hand, Settings as SettingsIcon, X, Volume2, Vibrate, AlertTriangle, Snowflake, Grid } from 'lucide-react';
+import { RotateCcw, Undo2, Hammer, Shuffle, Share2, Hand, Settings as SettingsIcon, X, Volume2, Vibrate, AlertTriangle, Snowflake, Grid, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
@@ -43,6 +43,803 @@ interface GameHistory {
 // --- Constants & Helpers ---
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
+// CSS clamp() fallback for older WebView engines (Android 7-8, AOSP WebView < Chrome 79)
+// Falls back to the preferred (middle) value which uses vw units for responsiveness
+const safeClamp = (min: string, preferred: string, max: string): string => {
+  try {
+    if (typeof CSS !== 'undefined' && CSS.supports && CSS.supports('font-size', `clamp(${min}, ${preferred}, ${max})`)) {
+      return `clamp(${min}, ${preferred}, ${max})`;
+    }
+  } catch (_e) { /* CSS.supports not available */ }
+  return preferred;
+};
+
+const TRANSLATIONS: Record<string, any> = {
+  en: {
+    score: "Score",
+    best: "Best",
+    undo: "Undo",
+    hammer: "Hammer",
+    shuffle: "Shuffle",
+    resetProgress: "Reset Progress",
+    howToPlay: "How to Play",
+    wait: "Wait!",
+    areYouSureExit: "Are you sure you want to exit?",
+    exitApp: "Exit App",
+    keepPlaying: "Keep Playing",
+    welcomeBack: "Welcome Back",
+    continueGame: "Continue Game",
+    startNew: "Start New",
+    rotateDevice: "Rotate Device",
+    retry: "Retry",
+    shareResults: "Share Results",
+    back: "Back",
+    next: "Next",
+    start: "Start",
+    settings: "Settings",
+    sound: "Sound",
+    haptics: "Haptics",
+    yes: "YES",
+    no: "NO",
+    areYouSure: "Are you sure?",
+    warningText: "Grid Evolution is designed to be played in portrait mode. Please rotate your phone to continue.",
+    recoveryText: "You have an unfinished game.<br/>Would you like to continue?",
+    evolutionHalted: "EVOLUTION HALTED",
+    finalScore: "Final Score",
+    largestBlock: "Largest Block",
+    totalMoves: "Total Moves",
+    efficiency: "Efficiency",
+    longestCombo: "Longest Combo",
+    evolutionLevel: "Evolution Level",
+    newRecord: "New Record!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "LEVEL UP: 5x5 GRID UNLOCKED!",
+    levelUpUnlocked6x6: "LEVEL UP: 6x6 GRID UNLOCKED!",
+    levelReached: "LEVEL {level} REACHED!",
+    step1Title: "THE CORE MECHANIC",
+    step1Desc: "Swipe to slide all tiles. When two tiles with the same value collide, they MERGE into a single, higher-value tile to evolve the grid.",
+    step2Title: "ENTROPY & DEGRADATION",
+    step2Desc: "ENTROPY ALERT! If no merges occur for 7 moves (decreases as you level up), your highest tile loses half its value. Keep moving!",
+    step3Title: "TEMPORAL VOIDS",
+    step3Desc: "TEMPORAL VOIDS! These areas appearing in the center of the grid restrict your movements. You cannot pass through until the timer runs out.",
+    step4Title: "THE MANUAL HAMMER",
+    step4Desc: "STRATEGIC INTERVENTION! When fully charged, select the hammer and destroy any tile on the grid. Successful moves charge the hammer.",
+    step5Title: "SCALING CHALLENGE",
+    step5Desc: "THE GRID EXPANDS! As you level up, the area grows, voids increase, and Entropy time shrinks. Can you reach the limit?",
+    shareMessage: "I reached Level {level} with {score} points in Grid Evolution!\nLargest block: {maxBlock}\nMoves: {moves}",
+    language: "Language",
+    reduceEffects: "Reduce Effects",
+    loadingText: "LOADING GRID EVOLUTION..."
+  },
+  tr: {
+    score: "Skor",
+    best: "En İyi",
+    undo: "Geri Al",
+    hammer: "Çekiç",
+    shuffle: "Karıştır",
+    resetProgress: "İlerlemeyi Sıfırla",
+    howToPlay: "Nasıl Oynanır",
+    wait: "Bekle!",
+    areYouSureExit: "Çıkmak istediğinize emin misiniz?",
+    exitApp: "Oyundan Çık",
+    keepPlaying: "Oynamaya Devam Et",
+    welcomeBack: "Tekrar Hoş Geldiniz",
+    continueGame: "Oyuna Devam Et",
+    startNew: "Yeni Başla",
+    rotateDevice: "Cihazı Döndür",
+    retry: "Yeniden Dene",
+    shareResults: "Sonuçları Paylaş",
+    back: "Geri",
+    next: "İleri",
+    start: "Başla",
+    settings: "Ayarlar",
+    sound: "Ses",
+    haptics: "Titreşim",
+    yes: "EVET",
+    no: "HAYIR",
+    areYouSure: "Emin misiniz?",
+    warningText: "Grid Evolution dikey modda oynanacak şekilde tasarlanmıştır. Devam etmek için lütfen telefonunuzu döndürün.",
+    recoveryText: "Yarım kalmış bir oyununuz var.<br/>Devam etmek ister misiniz?",
+    evolutionHalted: "EVRİM DURDU",
+    finalScore: "Son Skor",
+    largestBlock: "En Büyük Blok",
+    totalMoves: "Toplam Hamle",
+    efficiency: "Verimlilik",
+    longestCombo: "En Uzun Kombo",
+    evolutionLevel: "Evrim Seviyesi",
+    newRecord: "Yeni Rekor!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "SEVİYE YÜKSELDİ: 5x5 IZGARA AÇILDI!",
+    levelUpUnlocked6x6: "SEVİYE YÜKSELDİ: 6x6 IZGARA AÇILDI!",
+    levelReached: "SEVİYE {level} ULAŞILDI!",
+    step1Title: "ANA MEKANİK",
+    step1Desc: "Tüm karoları kaydırmak için sürükleyin. Aynı değere sahip iki karo çarpıştığında, ızgarayı evrimleştirmek için daha yüksek değerli tek bir karo halinde BİRLEŞİRLER.",
+    step2Title: "ENTROPİ VE DEGRADASYON",
+    step2Desc: "ENTROPİ UYARISI! 7 hamle boyunca hiç birleşme olmazsa (seviye atladıkça azalır), en yüksek karonuz değerinin yarısını kaybeder. Hareket etmeye devam edin!",
+    step3Title: "ZAMANSAL BOŞLUKLAR",
+    step3Desc: "ZAMANSAL BOŞLUKLAR! Izgaranın ortasında beliren bu alanlar hareketlerinizi kısıtlar. Zamanlayıcı bitene kadar buradan geçemezsiniz.",
+    step4Title: "MANUEL ÇEKİÇ",
+    step4Desc: "STRATEJİK MÜDAHALE! Tamamen şarj olduğunda, çekici seçip ızgaradaki herhangi bir karoyu yok edin. Başarılı hamleler çekici şarj eder.",
+    step5Title: "ÖLÇEKLENEN ZORLUK",
+    step5Desc: "IZGARA GENİŞLİYOR! Seviye atladıkça alan büyür, boşluklar artar ve Entropi süresi kısalır. Sınıra ulaşabilir misiniz?",
+    shareMessage: "Grid Evolution oyununda {score} puanla Seviye {level}'e ulaştım!\nEn büyük blok: {maxBlock}\nHamle sayısı: {moves}",
+    language: "Dil",
+    reduceEffects: "Efektleri Azalt",
+    loadingText: "GRID EVOLUTION YÜKLENIYOR..."
+  },
+  es: {
+    score: "Puntuación",
+    best: "Mejor",
+    undo: "Deshacer",
+    hammer: "Martillo",
+    shuffle: "Mezclar",
+    resetProgress: "Restablecer Progreso",
+    howToPlay: "Cómo Jugar",
+    wait: "¡Espera!",
+    areYouSureExit: "¿Seguro que quieres salir?",
+    exitApp: "Salir de la App",
+    keepPlaying: "Seguir Jugando",
+    welcomeBack: "Bienvenido de Nuevo",
+    continueGame: "Continuar Partida",
+    startNew: "Empezar de Nuevo",
+    rotateDevice: "Rotar Dispositivo",
+    retry: "Reintentar",
+    shareResults: "Compartir Resultados",
+    back: "Atrás",
+    next: "Siguiente",
+    start: "Comenzar",
+    settings: "Ajustes",
+    sound: "Sonido",
+    haptics: "Vibración",
+    yes: "SÍ",
+    no: "NO",
+    areYouSure: "¿Estás seguro?",
+    warningText: "Grid Evolution está diseñado para jugarse en modo retrato. Rota tu teléfono para continuar.",
+    recoveryText: "Tienes una partida sin terminar.<br/>¿Te gustaría continuar?",
+    evolutionHalted: "EVOLUCIÓN DETENIDA",
+    finalScore: "Puntuación Final",
+    largestBlock: "Bloque Más Grande",
+    totalMoves: "Movimientos Totales",
+    efficiency: "Eficiencia",
+    longestCombo: "Combo Más Largo",
+    evolutionLevel: "Nivel de Evolución",
+    newRecord: "¡Nuevo Récord!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "¡NIVEL UP: TABLERO 5x5 DESBLOQUEADO!",
+    levelUpUnlocked6x6: "¡NIVEL UP: TABLERO 6x6 DESBLOQUEADO!",
+    levelReached: "¡NIVEL {level} ALCANZADO!",
+    step1Title: "LA MECÁNICA CENTRAL",
+    step1Desc: "Desliza para mover todas las fichas. Cuando dos fichas del mismo valor chocan, se FUSIONAN en una sola de mayor valor para hacer evolucionar el tablero.",
+    step2Title: "ENTROPÍA Y DEGRADACIÓN",
+    step2Desc: "¡ALERTA DE ENTROPÍA! Si no hay fusiones durante 7 movimientos (disminuye al subir de nivel), tu ficha más alta pierde la mitad de su valor. ¡Sigue moviéndote!",
+    step3Title: "VACÍOS TEMPORALES",
+    step3Desc: "¡VACÍOS TEMPORALES! Estas áreas que aparecen en el centro del tablero limitan tus movimientos. No podrás pasar hasta que termine el temporizador.",
+    step4Title: "EL MARTILLO MANUAL",
+    step4Desc: "¡INTERVENCIÓN ESTRATÉGICA! Cuando esté cargado por completo, selecciona el martillo y destruye cualquier ficha del tablero. Los movimientos exitosos lo cargan.",
+    step5Title: "DESAFÍO DE ESCALA",
+    step5Desc: "¡EL TABLERO SE EXPANDE! Al subir de nivel, el área crece, los vacíos aumentan y el tiempo de Entropía disminuye. ¿Podrás llegar al límite?",
+    shareMessage: "¡Alcancé el nivel {level} con {score} puntos en Grid Evolution!\nBloque más grande: {maxBlock}\nMovimientos: {moves}",
+    language: "Idioma",
+    reduceEffects: "Reducir Efectos",
+    loadingText: "CARGANDO GRID EVOLUTION..."
+  },
+  fr: {
+    score: "Score",
+    best: "Meilleur",
+    undo: "Annuler",
+    hammer: "Marteau",
+    shuffle: "Mélanger",
+    resetProgress: "Réinitialiser",
+    howToPlay: "Comment Jouer",
+    wait: "Attendez !",
+    areYouSureExit: "Voulez-vous vraiment quitter ?",
+    exitApp: "Quitter l'App",
+    keepPlaying: "Continuer",
+    welcomeBack: "Bon Retour",
+    continueGame: "Continuer",
+    startNew: "Nouveau Jeu",
+    rotateDevice: "Pivoter l'Appareil",
+    retry: "Recommencer",
+    shareResults: "Partager",
+    back: "Retour",
+    next: "Suivant",
+    start: "Démarrer",
+    settings: "Paramètres",
+    sound: "Son",
+    haptics: "Haptique",
+    yes: "OUI",
+    no: "NON",
+    areYouSure: "Êtes-vous sûr ?",
+    warningText: "Grid Evolution est conçu pour le mode portrait. Veuillez pivoter votre téléphone pour continuer.",
+    recoveryText: "Vous avez une partie en cours.<br/>Voulez-vous la continuer ?",
+    evolutionHalted: "ÉVOLUTION ARRÊTÉE",
+    finalScore: "Score Final",
+    largestBlock: "Plus Grand Bloc",
+    totalMoves: "Mouvements Totaux",
+    efficiency: "Efficacité",
+    longestCombo: "Plus Long Combo",
+    evolutionLevel: "Niveau d'Évolution",
+    newRecord: "Nouveau Record !",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "NIVEAU SUPÉRIEUR : GRILLE 5x5 DÉBLOQUÉE !",
+    levelUpUnlocked6x6: "NIVEAU SUPÉRIEUR : GRILLE 6x6 DÉBLOQUÉE !",
+    levelReached: "NIVEAU {level} ATTEINT !",
+    step1Title: "MÉCANIQUE DE BASE",
+    step1Desc: "Faites glisser pour déplacer toutes les tuiles. Lorsque deux tuiles de même valeur se rencontrent, elles FUSIONNENT en une seule pour faire évoluer la grille.",
+    step2Title: "ENTROPIE & DÉGRADATION",
+    step2Desc: "ALERTE D'ENTROPIE ! Sans fusion pendant 7 coups (diminue avec les niveaux), votre tuile la plus haute perd la moitié de sa valeur. Continuez à bouger !",
+    step3Title: "VIDES TEMPORELS",
+    step3Desc: "VIDES TEMPORELS ! Ces zones apparaissant au centre de la grille restreignent vos mouvements. Impossible de passer avant la fin du compte à rebours.",
+    step4Title: "LE MARTEAU MANUEL",
+    step4Desc: "INTERVENTION STRATÉGIQUE ! Une fois chargé, sélectionnez le marteau pour détruire n'importe quelle tuile. Les mouvements réussis chargent le marteau.",
+    step5Title: "DÉFI DE TAILLE",
+    step5Desc: "LA GRILLE S'AGRANDIT ! À mesure que vous montez de niveau, la grille grandit, les vides augmentent et le temps d'entropie diminue. Atteindrez-vous la limite ?",
+    shareMessage: "J'ai atteint le niveau {level} avec {score} points dans Grid Evolution!\nPlus grand bloc: {maxBlock}\nMouvements: {moves}",
+    language: "Langue",
+    reduceEffects: "Réduire les Effets",
+    loadingText: "CHARGEMENT DE GRID EVOLUTION..."
+  },
+  ru: {
+    score: "Счет",
+    best: "Рекорд",
+    undo: "Назад",
+    hammer: "Молот",
+    shuffle: "Перемешать",
+    resetProgress: "Сбросить прогресс",
+    howToPlay: "Как играть",
+    wait: "Стоп!",
+    areYouSureExit: "Вы уверены, что хотите выйти?",
+    exitApp: "Выйти",
+    keepPlaying: "Играть дальше",
+    welcomeBack: "С возвращением",
+    continueGame: "Продолжить",
+    startNew: "Новая игра",
+    rotateDevice: "Поверните экран",
+    retry: "Повторить",
+    shareResults: "Поделиться",
+    back: "Назад",
+    next: "Далее",
+    start: "Старт",
+    settings: "Настройки",
+    sound: "Звук",
+    haptics: "Вибрация",
+    yes: "ДА",
+    no: "НЕТ",
+    areYouSure: "Вы уверены?",
+    warningText: "Grid Evolution разработана для портретного режима. Пожалуйста, поверните ваше устройство.",
+    recoveryText: "У вас есть незаконченная игра.<br/>Хотите продолжить?",
+    evolutionHalted: "ЭВОЛЮЦИЯ ОСТАНОВЛЕНА",
+    finalScore: "Финальный счет",
+    largestBlock: "Лучший блок",
+    totalMoves: "Всего ходов",
+    efficiency: "Эффективность",
+    longestCombo: "Лучшее комбо",
+    evolutionLevel: "Уровень эволюции",
+    newRecord: "Новый рекорд!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "УРОВЕНЬ ПОВЫШЕН: СЕТКА 5x5 РАЗБЛОКИРОВАНА!",
+    levelUpUnlocked6x6: "УРОВЕНЬ ПОВЫШЕН: СЕТКА 6x6 РАЗБЛОКИРОВАНА!",
+    levelReached: "УРОВЕНЬ {level} ДОСТИГНУТ!",
+    step1Title: "ОСНОВНАЯ МЕХАНИКА",
+    step1Desc: "Проведите пальцем, чтобы сдвинуть плитки. При столкновении двух плиток с одинаковым значением они ОБЪЕДИНЯЮТСЯ в одну с большим значением.",
+    step2Title: "ЭНТРОПИЯ И РАСПАД",
+    step2Desc: "ВНИМАНИЕ: ЭНТРОПИЯ! Если за 7 ходов не произошло ни одного слияния, ваша самая большая плитка теряет половину стоимости. Продолжайте ходить!",
+    step3Title: "ВРЕМЕННЫЕ ПУСТОТЫ",
+    step3Desc: "ВРЕМЕННЫЕ ПУСТОТЫ! Эти зоны появляются в центре сетки и мешают движению. Вы не сможете пройти, пока не истечет таймер.",
+    step4Title: "РУЧНОЙ МОЛОТ",
+    step4Desc: "СТРАТЕГИЧЕСКОЕ РЕШЕНИЕ! При полном заряде выберите молот и уничтожьте любую плитку на поле. Успешные ходы заряжают молот.",
+    step5Title: "МАСШТАБНЫЙ ВЫЗОВ",
+    step5Desc: "СЕТКА РАСШИРЯЕТСЯ! С ростом уровня поле увеличивается, пустот становится больше, а время энтропии сокращается. Дойдете до лимита?",
+    shareMessage: "Я достиг уровня {level} с {score} очками в Grid Evolution!\nЛучший блок: {maxBlock}\nХодов: {moves}",
+    language: "Язык",
+    reduceEffects: "Уменьшить эффекты",
+    loadingText: "ЗАГРУЗКА GRID EVOLUTION..."
+  },
+  ar: {
+    score: "النتيجة",
+    best: "الأفضل",
+    undo: "تراجع",
+    hammer: "المطرقة",
+    shuffle: "خلط",
+    resetProgress: "إعادة تعيين التقدم",
+    howToPlay: "كيفية اللعب",
+    wait: "انتظر!",
+    areYouSureExit: "هل أنت متأكد أنك تريد الخروج؟",
+    exitApp: "الخروج من التطبيق",
+    keepPlaying: "مواصلة اللعب",
+    welcomeBack: "مرحباً بعودتك",
+    continueGame: "مواصلة اللعبة",
+    startNew: "بدء جديد",
+    rotateDevice: "تدوير الجهاز",
+    retry: "إعادة المحاولة",
+    shareResults: "مشاركة النتائج",
+    back: "السابق",
+    next: "التالي",
+    start: "ابدأ",
+    settings: "الإعدادات",
+    sound: "الصوت",
+    haptics: "الاهتزاز",
+    yes: "نعم",
+    no: "لا",
+    areYouSure: "هل أنت متأكد؟",
+    warningText: "تم تصميم Grid Evolution لتلعب في الوضع العمودي. يرجى تدوير هاتفك للمتابعة.",
+    recoveryText: "لديك لعبة غير مكتملة.<br/>هل تود الاستمرار؟",
+    evolutionHalted: "توقف التطور",
+    finalScore: "النتيجة النهائية",
+    largestBlock: "أكبر كتلة",
+    totalMoves: "إجمالي الحركات",
+    efficiency: "الكفاءة",
+    longestCombo: "أطول كومبو",
+    evolutionLevel: "مستوى التطور",
+    newRecord: "رقم قياسي جديد!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "ارتفع المستوى: تم فتح شبكة 5x5!",
+    levelUpUnlocked6x6: "ارتفع المستوى: تم فتح شبكة 6x6!",
+    levelReached: "تم الوصول إلى المستوى {level}!",
+    step1Title: "الميكانيكية الأساسية",
+    step1Desc: "اسحب لتحريك جميع البلاطات. عندما تصطدم بلاطتان بنفس القيمة، تندمجان في بلاطة واحدة بقيمة أعلى لتطوير الشبكة.",
+    step2Title: "القصور الذاتي والتدهور",
+    step2Desc: "تنبيه القصور! إذا لم يحدث أي اندماج خلال 7 حركات (تقل مع ارتفاع مستواك)، تفقد البlaطة الأعلى نصف قيمتها. استمر في التحرك!",
+    step3Title: "الفراغات الزمنية",
+    step3Desc: "الفراغات الزمنية! تظهر هذه المناطق في وسط الشبكة وتحد من حركاتك. لا يمكنك المرور من خلالها حتى ينتهي الموقت.",
+    step4Title: "المطرقة اليدوية",
+    step4Desc: "التدخل الاستراتيجي! عند شحنها بالكامل، اختر المطرقة ودمر أي بلاطة على الشبكة. الحركات الناجحة تشحن المطرقة.",
+    step5Title: "تحدي التوسع",
+    step5Desc: "الشبكة تتوسع! مع ارتفاع مستواك، تكبر المساحة، وتزداد الفراغات، ويقل وقت القصور الذاتي. هل يمكنك الوصول إلى الحد الأقصى؟",
+    shareMessage: "لقد وصلت إلى المستوى {level} بـ {score} نقطة في Grid Evolution!\nأكبر كتلة: {maxBlock}\nالحركات: {moves}",
+    language: "اللغة",
+    reduceEffects: "تقليل المؤثرات",
+    loadingText: "جاري التحميل..."
+  },
+  de: {
+    score: "Ergebnis",
+    best: "Rekord",
+    undo: "Zurück",
+    hammer: "Hammer",
+    shuffle: "Mischen",
+    resetProgress: "Zurücksetzen",
+    howToPlay: "Anleitung",
+    wait: "Warten!",
+    areYouSureExit: "Möchten Sie wirklich beenden?",
+    exitApp: "App beenden",
+    keepPlaying: "Weiterspielen",
+    welcomeBack: "Willkommen zurück",
+    continueGame: "Spiel fortsetzen",
+    startNew: "Neu starten",
+    rotateDevice: "Gerät drehen",
+    retry: "Wiederholen",
+    shareResults: "Teilen",
+    back: "Zurück",
+    next: "Weiter",
+    start: "Start",
+    settings: "Optionen",
+    sound: "Ton",
+    haptics: "Vibration",
+    yes: "JA",
+    no: "NEIN",
+    areYouSure: "Sind Sie sicher?",
+    warningText: "Grid Evolution ist für das Hochformat gedacht. Bitte drehen Sie Ihr Gerät, um fortzufahren.",
+    recoveryText: "Sie haben ein unvollendetes Spiel.<br/>Möchten Sie es fortsetzen?",
+    evolutionHalted: "EVOLUTION BEENDET",
+    finalScore: "Endstand",
+    largestBlock: "Größter Block",
+    totalMoves: "Züge gesamt",
+    efficiency: "Effizienz",
+    longestCombo: "Längste Combo",
+    evolutionLevel: "Evolutionsstufe",
+    newRecord: "Neuer Rekord!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "LEVEL UP: 5x5 FELD FREIGESCHALTET!",
+    levelUpUnlocked6x6: "LEVEL UP: 6x6 FELD FREIGESCHALTET!",
+    levelReached: "LEVEL {level} ERREICHT!",
+    step1Title: "DIE BASIS-MECHANIK",
+    step1Desc: "Wischen Sie, um Kacheln zu bewegen. Wenn zwei gleiche Kacheln kollidieren, VERSCHMELZEN sie zu einer Kachel mit höherem Wert, um das Spielfeld zu entwickeln.",
+    step2Title: "ENTROPIE & VERFALL",
+    step2Desc: "ENTROPIE-ALARM! Wenn 7 Züge lang keine Kacheln verschmelzen (sinkt je Level), verliert Ihre höchste Kachel die Hälfte ihres Wertes. Bleiben Sie in Bewegung!",
+    step3Title: "ZEITLICHE LEEREN",
+    step3Desc: "ZEITLICHE LEEREN! Diese Zonen erscheinen in der Mitte des Feldes und blockieren Züge. Sie können sie erst passieren, wenn der Timer abläuft.",
+    step4Title: "DER MANUELLE HAMMER",
+    step4Desc: "STRATEGISCHER EINGRIFF! Wenn der Hammer geladen ist, wählen Sie ihn aus und zerstören Sie eine beliebige Kachel. Erfolgreiche Züge laden den Hammer auf.",
+    step5Title: "SKALIERUNGS-CHALLENGE",
+    step5Desc: "DAS SPIELFELD WÄCHST! Mit höheren Levels wird das Feld größer, die Leeren nehmen zu und die Entropie-Zeit sinkt. Erreichen Sie das Limit?",
+    shareMessage: "Ich habe Level {level} mit {score} Punkten in Grid Evolution erreicht!\nGrößter Block: {maxBlock}\nZüge: {moves}",
+    language: "Sprache",
+    reduceEffects: "Effekte Reduzieren",
+    loadingText: "GRID EVOLUTION WIRD GELADEN..."
+  },
+  pt: {
+    score: "Pontos",
+    best: "Recorde",
+    undo: "Desfazer",
+    hammer: "Martelo",
+    shuffle: "Embaralhar",
+    resetProgress: "Redefinir Progresso",
+    howToPlay: "Como Jogar",
+    wait: "Espere!",
+    areYouSureExit: "Tem certeza de que deseja sair?",
+    exitApp: "Sair do App",
+    keepPlaying: "Continuar Jogando",
+    welcomeBack: "Bem-vindo de Volta",
+    continueGame: "Continuar Jogo",
+    startNew: "Iniciar Novo",
+    rotateDevice: "Rotacionar Dispositivo",
+    retry: "Repetir",
+    shareResults: "Compartilhar",
+    back: "Voltar",
+    next: "Avançar",
+    start: "Iniciar",
+    settings: "Ajustes",
+    sound: "Som",
+    haptics: "Vibração",
+    yes: "SIM",
+    no: "NÃO",
+    areYouSure: "Tem certeza?",
+    warningText: "Grid Evolution foi projetado para o modo retrato. Rotacione seu celular para continuar.",
+    recoveryText: "Você tem um jogo inacabado.<br/>Gostaria de continuar?",
+    evolutionHalted: "EVOLUÇÃO PARADA",
+    finalScore: "Pontuação Final",
+    largestBlock: "Maior Bloco",
+    totalMoves: "Movimentos Totais",
+    efficiency: "Eficiência",
+    longestCombo: "Maior Combo",
+    evolutionLevel: "Nível de Evolução",
+    newRecord: "Novo Recorde!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "LEVEL UP: GRADE 5x5 DESBLOQUEADA!",
+    levelUpUnlocked6x6: "LEVEL UP: GRADE 6x6 DESBLOQUEADA!",
+    levelReached: "NÍVEL {level} ALCANÇADO!",
+    step1Title: "A MECÂNICA CENTRAL",
+    step1Desc: "Deslize para mover os blocos. Quando dois blocos do mesmo valor colidem, eles se FUNDEM em um único bloco de valor maior para evoluir a grade.",
+    step2Title: "ENTROPIA E DEGRADACAO",
+    step2Desc: "ALERTA DE ENTROPIA! Se nenhuma fusão ocorrer em 7 movimentos (diminui conforme sobe de nível), seu maior bloco perde metade do valor. Continue se movendo!",
+    step3Title: "VAZIOS TEMPORAIS",
+    step3Desc: "VAZIOS TEMPORAIS! Estas áreas surgem no centro da grade e limitam seus movimentos. Você não poderá passar até que o cronômetro acabe.",
+    step4Title: "O MARTELO MANUAL",
+    step4Desc: "INTERVENÇÃO ESTRATÉGICA! Quando estiver carregado, selecione o martelo e destrua qualquer bloco na grade. Movimentos bem-sucedidos o carregam.",
+    step5Title: "DESAFIO EM ESCALA",
+    step5Desc: "A GRADE EXPANDE! Conforme sobe de nível, o espaço grows, os vazios aumentam e o tempo de entropia diminui. Consegue alcançar o limite?",
+    shareMessage: "Alcancei o nível {level} com {score} pontos no Grid Evolution!\nMaior bloco: {maxBlock}\nMovimentos: {moves}",
+    language: "Idioma",
+    reduceEffects: "Reduzir Efeitos",
+    loadingText: "CARREGANDO GRID EVOLUTION..."
+  },
+  ja: {
+    score: "スコア",
+    best: "ベスト",
+    undo: "戻す",
+    hammer: "ハンマー",
+    shuffle: "シャッフル",
+    resetProgress: "進行状況リセット",
+    howToPlay: "遊び方",
+    wait: "お待ちください！",
+    areYouSureExit: "本当に終了しますか？",
+    exitApp: "アプリを終了",
+    keepPlaying: "プレイを続ける",
+    welcomeBack: "おかえりなさい",
+    continueGame: "ゲームを再開",
+    startNew: "新しく始める",
+    rotateDevice: "画面を回転してください",
+    retry: "もう一度",
+    shareResults: "結果をシェア",
+    back: "戻る",
+    next: "次へ",
+    start: "スタート",
+    settings: "設定",
+    sound: "サウンド",
+    haptics: "バイブレーション",
+    yes: "はい",
+    no: "いいえ",
+    areYouSure: "よろしいですか？",
+    warningText: "Grid Evolutionは縦画面専用です。スマートフォンを縦向きにしてください。",
+    recoveryText: "中断されたゲームがあります。<br/>再開しますか？",
+    evolutionHalted: "進化停止",
+    finalScore: "最終スコア",
+    largestBlock: "最大ブロック",
+    totalMoves: "총 이동 수",
+    efficiency: "効率性",
+    longestCombo: "最長コンボ",
+    evolutionLevel: "進化レベル",
+    newRecord: "新記録！",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "レベルアップ：5x5グリッド解放！",
+    levelUpUnlocked6x6: "レベルアップ：6x6グリッド解放！",
+    levelReached: "レベル {level} 到達！",
+    step1Title: "基本ルール",
+    step1Desc: "スワイプしてタイルをスライドさせます。同じ数値のタイルが衝突すると合体し、より高い数値の1つのタイルに進化します。",
+    step2Title: "エントロピーと劣化",
+    step2Desc: "エントロピー警告！合体が7回（レベルアップで減少）発生しないと、最大数値のタイルが半減します。動き続けましょう！",
+    step3Title: "時空の裂け目",
+    step3Desc: "時空의 裂け目！グリッドの中央に現れるこのエリアは侵入不可能です。タイマーがゼロになるまで通過できません。",
+    step4Title: "マニュアルハンマー",
+    step4Desc: "戦略的介入！フルチャージ時にハンマーを選択して、グリッド上の任意のタイルを破壊できます。移動に成功するとチャージされます。",
+    step5Title: "拡大する挑戦",
+    step5Desc: "グリッドが拡大！レベルが上がると面積が増え、裂け目が増加し、エントロピー猶予時間が短縮されます。限界へ到達できますか？",
+    shareMessage: "Grid Evolutionでレベル {level} に到達、スコア {score} を達成しました！\n最大ブロック: {maxBlock}\n移動数: {moves}",
+    language: "言語",
+    reduceEffects: "エフェクト軽減",
+    loadingText: "GRID EVOLUTION 読み込み中..."
+  },
+  zh: {
+    score: "得分",
+    best: "历史最高",
+    undo: "撤销",
+    hammer: "锤子",
+    shuffle: "打乱",
+    resetProgress: "重置进度",
+    howToPlay: "玩法介绍",
+    wait: "请稍等！",
+    areYouSureExit: "您确定要退出吗？",
+    exitApp: "退出应用",
+    keepPlaying: "继续游戏",
+    welcomeBack: "欢迎回来",
+    continueGame: "继续游戏",
+    startNew: "开始新游戏",
+    rotateDevice: "旋转设备",
+    retry: "重试",
+    shareResults: "分享结果",
+    back: "返回",
+    next: "下一步",
+    start: "开始",
+    settings: "设置",
+    sound: "声音",
+    haptics: "触感反馈",
+    yes: "是",
+    no: "否",
+    areYouSure: "您确定吗？",
+    warningText: "Grid Evolution 设计在竖屏下运行。请将手机旋转为竖屏以继续。",
+    recoveryText: "您有未完成的游戏。<br/>是否继续？",
+    evolutionHalted: "进化终止",
+    finalScore: "最终得分",
+    largestBlock: "最大方块",
+    totalMoves: "总移动步数",
+    efficiency: "效率",
+    longestCombo: "最长连击",
+    evolutionLevel: "进化等级",
+    newRecord: "新纪录！",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "等级提升：解锁 5x5 网格！",
+    levelUpUnlocked6x6: "等级提升：解锁 6x6 网格！",
+    levelReached: "达到等级 {level}！",
+    step1Title: "核心玩法",
+    step1Desc: "滑动以滑动所有方块。当两个具有相同数值的方块发生碰撞时，它们会合并成一个更高数值的方块以完成进化。",
+    step2Title: "熵增与衰退",
+    step2Desc: "熵增警报！如果连续7步没有发生合并（随着等级提升步数会减少），您最大数值 of 方块将减半。保持移动！",
+    step3Title: "时空虚空",
+    step3Desc: "时空虚空！这些出现在网格中心的区域会限制您的移动。在计时器归零之前，您无法通过 these 区域。",
+    step4Title: "手动重锤",
+    step4Desc: "战略干预！当重锤充满电时，选择并击碎网格上的任意方块。成功的移动会为重锤充电。",
+    step5Title: "网格扩张挑战",
+    step5Desc: "网格在扩张！随着等级提升，区域变大，虚空增多，且熵增宽限时间变短。您能挑战到极限吗？",
+    shareMessage: "我在 Grid Evolution 中达到了等级 {level} 并获得了 {score} 分！\n最大方块: {maxBlock}\n移动步数: {moves}",
+    language: "语言",
+    reduceEffects: "减少效果",
+    loadingText: "正在加载 GRID EVOLUTION..."
+  },
+  pl: {
+    score: "Wynik",
+    best: "Najlepszy",
+    undo: "Cofnij",
+    hammer: "Młotek",
+    shuffle: "Tasuj",
+    resetProgress: "Resetuj postęp",
+    howToPlay: "Jak grać",
+    wait: "Czekaj!",
+    areYouSureExit: "Czy na pewno chcesz wyjść?",
+    exitApp: "Zamknij grę",
+    keepPlaying: "Graj dalej",
+    welcomeBack: "Witaj z powrotem",
+    continueGame: "Kontynuuj grę",
+    startNew: "Nowa gra",
+    rotateDevice: "Obróć urządzenie",
+    retry: "Spróbuj ponownie",
+    shareResults: "Udostępnij wyniki",
+    back: "Wstecz",
+    next: "Dalej",
+    start: "Start",
+    settings: "Ustawienia",
+    sound: "Dźwięk",
+    haptics: "Wibracje",
+    yes: "TAK",
+    no: "NIE",
+    areYouSure: "Czy na pewno?",
+    warningText: "Grid Evolution została zaprojektowana do grania w trybie pionowym. Obróć telefon, aby kontynuować.",
+    recoveryText: "Masz niedokończoną grę.<br/>Czy chcesz ją kontynuować?",
+    evolutionHalted: "EWOLUCJA WSTRZYMANA",
+    finalScore: "Wynik końcowy",
+    largestBlock: "Największy blok",
+    totalMoves: "Liczba ruchów",
+    efficiency: "Wydajność",
+    longestCombo: "Najdłuższe kombo",
+    evolutionLevel: "Poziom ewolucji",
+    newRecord: "Nowy rekord!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "POZIOM W GÓRĘ: ODBLOKOWANO SIATKĘ 5x5!",
+    levelUpUnlocked6x6: "POZIOM W GÓRĘ: ODBLOKOWANO SIATKĘ 6x6!",
+    levelReached: "POZIOM {level} OSIĄGNIĘTY!",
+    step1Title: "GŁÓWNA MECHANIKA",
+    step1Desc: "Przesuwaj palcem, aby przesuwać wszystkie kafelki. Gdy zderzą się dwa kafelki o tej samej wartości, ŁĄCZĄ SIĘ w jeden o wyższej wartości, aby ewoluować siatkę.",
+    step2Title: "ENTROPIA I DEGRADACJA",
+    step2Desc: "ALERT ENTROPII! Jeśli w ciągu 7 ruchów (zmniejsza się wraz z poziomem) nie dojdzie do połączenia, Twój najwyższy kafelek traci połowę swojej wartości. Ruszaj się!",
+    step3Title: "PUSTKI CZASOWE",
+    step3Desc: "PUSTKI CZASOWE! Te obszary pojawiające się na środku siatki ograniczają Twoje ruchy. Nie możesz przez nie przejść, dopóki licznik czasu nie dojdzie do zera.",
+    step4Title: "RĘCZNY MŁOTEK",
+    step4Desc: "STRATEGICZNA INTERWENCJA! Po pełnym naładowaniu wybierz młotek i zniszcz dowolny kafelek na siatce. Udane ruchy ładują młotek.",
+    step5Title: "ROSNĄCE WYZWANIE",
+    step5Desc: "SIATKA SIĘ POWIĘKSZA! W miarę zdobywania kolejnych poziomów obszar gry rośnie, pojawia się więcej pustek, a czas na reakcję entropii się kurczy. Czy zdołasz osiągnąć limit?",
+    shareMessage: "Osiągnąłem poziom {level} z wynikiem {score} w Grid Evolution!\nNajwiększy blok: {maxBlock}\nRuchy: {moves}",
+    language: "Język",
+    reduceEffects: "Ogranicz Efekty",
+    loadingText: "ŁADOWANIE GRID EVOLUTION..."
+  },
+  it: {
+    score: "Punteggio",
+    best: "Migliore",
+    undo: "Annulla",
+    hammer: "Martello",
+    shuffle: "Mischia",
+    resetProgress: "Azzera Progressi",
+    howToPlay: "Come Giocare",
+    wait: "Aspetta!",
+    areYouSureExit: "Sei sicuro di voler uscire?",
+    exitApp: "Esci dall'App",
+    keepPlaying: "Continua a Giocare",
+    welcomeBack: "Bentornato",
+    continueGame: "Continua Partita",
+    startNew: "Nuova Partita",
+    rotateDevice: "Ruota il Dispositivo",
+    retry: "Riprova",
+    shareResults: "Condividi Risultati",
+    back: "Indietro",
+    next: "Avanti",
+    start: "Inizia",
+    settings: "Impostazioni",
+    sound: "Suono",
+    haptics: "Vibrazione",
+    yes: "SÌ",
+    no: "NO",
+    areYouSure: "Sei sicuro?",
+    warningText: "Grid Evolution è progettato per essere giocato in modalità ritratto. Ruota il telefono per continuare.",
+    recoveryText: "Hai una partita non terminata.<br/>Vuoi continuarla?",
+    evolutionHalted: "EVOLUZIONE INTERROTTA",
+    finalScore: "Punteggio Finale",
+    largestBlock: "Blocco Più Grande",
+    totalMoves: "Mosse Totali",
+    efficiency: "Efficienza",
+    longestCombo: "Combo Più Lunga",
+    evolutionLevel: "Livello Evoluzione",
+    newRecord: "Nuovo Record!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "LIVELLO SU: GRIGLIA 5x5 SBLOCCATA!",
+    levelUpUnlocked6x6: "LIVELLO SU: GRIGLIA 6x6 SBLOCCATA!",
+    levelReached: "LIVELLO {level} RAGGIUNTO!",
+    step1Title: "MECCANICA DI BASE",
+    step1Desc: "Scorri per muovere tutte le tessere. Quando due tessere con lo stesso valore si scontrano, si FONDONO in una singola tessera di valore superiore per far evolvere la griglia.",
+    step2Title: "ENTROPIA E DEGRADAZIONE",
+    step2Desc: "ALLERTA ENTROPIA! Se non avvengono fusioni per 7 mosse (diminuiscono salendo di livello), la tessera più alta perde metà del suo valore. Continua a muoverti!",
+    step3Title: "VUOTI TEMPORALI",
+    step3Desc: "VUOTI TEMPORALI! Queste aree che appaiono al centro della griglia limitano i tuoi movimenti. Non potrai passarci finché il timer non scade.",
+    step4Title: "IL MARTELLO MANUALE",
+    step4Desc: "INTERVENTO STRATEGICO! Quando è completamente carico, seleziona il martello e distruggi qualsiasi tessera sulla griglia. Le mosse riuscite caricano il martello.",
+    step5Title: "SFIDA IN SCALA",
+    step5Desc: "LA GRIGLIA SI ESPANDE! Salendo di livello, l'area di gioco cresce, i vuoti aumentano e il tempo di entropia diminuisce. Riuscirai a raggiungere il limite?",
+    shareMessage: "Ho raggiunto il Livello {level} con {score} punti in Grid Evolution!\nBlocco più grande: {maxBlock}\nMosse: {moves}",
+    language: "Lingua",
+    reduceEffects: "Riduci Effetti",
+    loadingText: "CARICAMENTO GRID EVOLUTION..."
+  },
+  ko: {
+    score: "점수",
+    best: "최고 점수",
+    undo: "되돌리기",
+    hammer: "망치",
+    shuffle: "섞기",
+    resetProgress: "진행 상황 초기화",
+    howToPlay: "게임 방법",
+    wait: "잠깐만요!",
+    areYouSureExit: "정말로 종료하시겠습니까?",
+    exitApp: "앱 종료",
+    keepPlaying: "계속 플레이",
+    welcomeBack: "다시 오신 것을 환영합니다",
+    continueGame: "게임 이어하기",
+    startNew: "새 게임 시작",
+    rotateDevice: "기기 회전",
+    retry: "다시 시도",
+    shareResults: "결과 공유",
+    back: "이전",
+    next: "다음",
+    start: "시작",
+    settings: "설정",
+    sound: "소리",
+    haptics: "진동",
+    yes: "예",
+    no: "아니오",
+    areYouSure: "확실합니까?",
+    warningText: "Grid Evolution은 세로 모드 전용으로 설계되었습니다. 계속하려면 휴대폰을 세로로 회전해 주세요.",
+    recoveryText: "진행 중이던 게임이 있습니다.<br/>계속하시겠습니까?",
+    evolutionHalted: "진화 중단",
+    finalScore: "최종 점수",
+    largestBlock: "가장 큰 블록",
+    totalMoves: "총 이동 횟수",
+    efficiency: "효율성",
+    longestCombo: "최장 콤보",
+    evolutionLevel: "진화 레벨",
+    newRecord: "새로운 기록!",
+    double: "DOUBLE",
+    triple: "TRIPLE",
+    quadruple: "QUADRUPLE",
+    penta: "PENTA",
+    hexa: "HEXA EVOLUTION",
+    levelUpUnlocked5x5: "레벨 업: 5x5 그리드 해제!",
+    levelUpUnlocked6x6: "레벨 업: 6x6 그리드 해제!",
+    levelReached: "레벨 {level} 도달!",
+    step1Title: "핵심 메커니즘",
+    step1Desc: "화면을 쓸어넘겨 모든 타일을 미십시오. 같은 값을 가진 두 타일이 충돌하면 하나로 합쳐져 더 높은 가치의 타일로 진화합니다.",
+    step2Title: "엔트로피와 기능 저하",
+    step2Desc: "엔트로피 경고! 7회 이동 동안 합치기가 일어나지 않으면(레벨이 올라갈수록 제한 횟수가 감소) 가장 높은 타일의 가치가 절반으로 떨어집니다. 계속 움직이십시오!",
+    step3Title: "시간의 공백",
+    step3Desc: "시간의 공백! 그리드 중앙에 나타나는 이 공백 영역들은 이동을 제한합니다. 타이머가 다 될 때까지 통과할 수 없습니다.",
+    step4Title: "수동 망치",
+    step4Desc: "전략적 개입! 망치가 완전히 충전되면 이를 선택하여 그리드 위의 원하는 타일을 파괴할 수 있습니다. 이동에 성공할 때마다 망치가 충전됩니다.",
+    step5Title: "확장되는 도전",
+    step5Desc: "그리드 확장! 레벨이 높아질수록 그리드가 커지고 공백이 늘어나며 엔트로피 유예 시간이 짧아집니다. 한계에 도전해 보십시오!",
+    shareMessage: "Grid Evolution에서 {score}점으로 레벨 {level}에 도달했습니다!\n가장 큰 블록: {maxBlock}\n이동 수: {moves}",
+    language: "언어",
+    reduceEffects: "효과 줄이기",
+    loadingText: "GRID EVOLUTION 로딩 중..."
+  }
+};
+
+const detectedLang = typeof navigator !== 'undefined' ? navigator.language.split('-')[0] : 'en';
+const defaultLang = TRANSLATIONS[detectedLang] ? detectedLang : 'en';
+
 const getThreshold = (lvl: number) => {
   if (lvl <= 1) return 0;
   if (lvl <= 3) return Math.pow(lvl - 1, 2) * 2500;
@@ -67,16 +864,16 @@ const getLevelInfo = (currentScore: number) => {
 };
 
 const TILE_STYLES: Record<number, { bg: string, text: string }> = {
-  2: { bg: '#D7CCC8', text: '#5D4037' },
-  4: { bg: '#DCEDC8', text: '#33691E' },
-  8: { bg: '#B2EBF2', text: '#006064' },
-  16: { bg: '#F8BBD0', text: '#880E4F' },
-  32: { bg: '#FFCCBC', text: '#BF360C' },
-  64: { bg: '#CFD8DC', text: '#263238' },
-  128: { bg: '#E1BEE7', text: '#4A148C' },
-  256: { bg: '#C5CAE9', text: '#1A237E' },
-  512: { bg: '#B2DFDB', text: '#004D40' },
-  1024: { bg: '#FFF9C4', text: '#F57F17' },
+  2: { bg: '#FFD8CC', text: '#5D2510' },
+  4: { bg: '#C8E6C9', text: '#1B5E20' },
+  8: { bg: '#B3E5FC', text: '#0D47A1' },
+  16: { bg: '#E1BEE7', text: '#4A148C' },
+  32: { bg: '#F8BBD0', text: '#880E4F' },
+  64: { bg: '#FFAB91', text: '#BF360C' },
+  128: { bg: '#80DEEA', text: '#006064' },
+  256: { bg: '#CE93D8', text: '#4A148C' },
+  512: { bg: '#80CBC4', text: '#004D40' },
+  1024: { bg: '#9FA8DA', text: '#1A237E' },
   2048: { bg: '#FFE082', text: '#FF6F00' }
 };
 
@@ -90,14 +887,16 @@ const TileComponent = memo(({
   tileSizePercent, 
   levelUpTrigger,
   isHammerActive,
-  onClick
+  onClick,
+  lowPerformanceMode
 }: { 
   tile: TileConfig, 
   gridSize: number, 
   tileSizePercent: string, 
   levelUpTrigger: number,
   isHammerActive?: boolean,
-  onClick?: (id: string) => void
+  onClick?: (id: string) => void,
+  lowPerformanceMode?: boolean
 }) => {
   const style = useMemo(() => getTileStyle(tile.value), [tile.value]);
   const isCenterVoid = tile.isVoid && tile.row > 0 && tile.row < gridSize - 1 && tile.col > 0 && tile.col < gridSize - 1;
@@ -107,8 +906,16 @@ const TileComponent = memo(({
   const isTier3 = !tile.isVoid && tile.value >= 512 && tile.value <= 1024;
   const isTier4 = !tile.isVoid && tile.value >= 2048;
 
+  const fontWeightClass = useMemo(() => {
+    if (tile.isVoid) return 'font-[100]';
+    if (tile.value <= 32) return 'font-normal';
+    if (tile.value <= 256) return 'font-medium';
+    return 'font-semibold';
+  }, [tile.value, tile.isVoid]);
+
   const boxShadow = useMemo(() => {
     if (tile.isGhost) return 'none';
+    if (lowPerformanceMode) return 'none';
     if (isTargetable) return `0 0 15px #6366F1, inset 0 0 10px rgba(99, 102, 241, 0.5)`;
     if (levelUpTrigger > 0) return `0 0 30px 10px #6366F1, inset 0 0 15px #6366F1`;
     if (tile.isVoid) return isCenterVoid ? 'inset 0 0 20px rgba(156, 163, 175, 0.4), 0 0 25px 8px rgba(156, 163, 175, 0.5)' : 'inset 0 0 20px rgba(156, 163, 175, 0.4), 0 0 15px rgba(156, 163, 175, 0.6)';
@@ -116,15 +923,17 @@ const TileComponent = memo(({
     if (isTier3) return `inset 0 0 15px rgba(255,255,255,0.4), 0 0 20px ${style.bg}80`;
     if (isTier2) return `inset 0 0 10px rgba(255,255,255,0.5), 0 0 0 1px #6366F1, 0 8px 16px rgba(0,0,0,0.5)`;
     return `inset 0 0 8px rgba(255,255,255,0.1), 0 8px 16px rgba(0,0,0,0.3)`;
-  }, [tile.value, tile.isVoid, tile.isGhost, isTargetable, levelUpTrigger, isCenterVoid, isTier2, isTier3, isTier4, style.bg]);
+  }, [tile.value, tile.isVoid, tile.isGhost, isTargetable, levelUpTrigger, isCenterVoid, isTier2, isTier3, isTier4, style.bg, lowPerformanceMode]);
   const activeShadow = tile.hasMoved ? 'none' : boxShadow;
 
   const backgroundStyles = useMemo(() => {
     const base: React.CSSProperties = {
-        backgroundColor: tile.isVoid ? 'rgba(10, 10, 10, 0.9)' : style.bg,
+        backgroundColor: tile.isVoid ? 'transparent' : style.bg,
         color: tile.isVoid ? '#E5E7EB' : style.text,
     };
-    if (isTier3 && !tile.isGhost) {
+    if (tile.isVoid) {
+        base.background = 'radial-gradient(circle at center, #0a0a0a 0%, #151515 100%)';
+    } else if (isTier3 && !tile.isGhost && !lowPerformanceMode) {
         base.background = `linear-gradient(135deg, ${style.bg} 0%, ${style.bg} 40%, rgba(255,255,255,0.8) 50%, ${style.bg} 60%, ${style.bg} 100%)`;
         base.backgroundSize = '200% 200%';
     }
@@ -144,49 +953,55 @@ const TileComponent = memo(({
       animate={{ 
           left: calculatedX,
           top: calculatedY,
-          scale: tile.isVoid ? [1, 1.05, 1] : (levelUpTrigger > 0 ? [1, 1.2, 0.9, 1.1, 1] : (tile.isMerged ? [1, 1.18, 1] : 1)),
+          scale: (tile.isVoid && !lowPerformanceMode) ? [1, 1.05, 1] : 1,
           opacity: tile.isGhost ? 0.55 : 1,
-          backgroundPosition: (isTier3 && !tile.isGhost && tile.isMerged) ? ['0% 0%', '200% 200%'] : '0% 0%',
+          backgroundPosition: (isTier3 && !tile.isGhost && tile.isMerged && !lowPerformanceMode) ? ['0% 0%', '200% 200%'] : '0% 0%',
           z: 0
       }}
       exit={tile.isGhost ? { opacity: 0, transition: { duration: 0.1 } } : { opacity: 0 }}
-      transition={{
-          left: { type: "tween", ease: [0.45, 0.05, 0.55, 0.95], duration: 0.16 },
-          top: { type: "tween", ease: [0.45, 0.05, 0.55, 0.95], duration: 0.16 },
-          scale: tile.isVoid ? { duration: 1.5, repeat: Infinity, ease: "easeInOut" } : (levelUpTrigger > 0 ? { duration: 1.2, times: [0, 0.3, 0.6, 0.8, 1], ease: "easeInOut" } : (tile.isNew ? { type: "tween", ease: "easeOut", duration: 0.2, delay: 0.1 } : (tile.isMerged ? { times: [0, 0.5, 1], duration: 0.2, ease: "easeOut", delay: 0.08 } : { type: "tween", ease: [0.45, 0.05, 0.55, 0.95], duration: 0.16 }))),
+      transition={lowPerformanceMode ? {
+          left: { type: "tween", duration: 0.05 },
+          top: { type: "tween", duration: 0.05 },
+          scale: { duration: 0 },
+          backgroundPosition: { duration: 0 },
+          opacity: { duration: 0 }
+      } : {
+          left: { type: "tween", ease: [0.4, 0, 0.2, 1], duration: 0.15 },
+          top: { type: "tween", ease: [0.4, 0, 0.2, 1], duration: 0.15 },
+          scale: tile.isVoid ? { duration: 1.5, repeat: Infinity, ease: "easeInOut" } : (tile.isNew ? { type: "spring", stiffness: 400, damping: 22, mass: 0.8 } : (tile.isMerged ? { type: "spring", stiffness: 350, damping: 20, mass: 0.8 } : { type: "tween", ease: [0.4, 0, 0.2, 1], duration: 0.15 })),
           backgroundPosition: (isTier3 && tile.isMerged) ? { duration: 1.5, ease: "linear" } : { duration: 0 },
           opacity: { duration: 0.1 }
       }}
       onClick={() => { if (isTargetable && onClick) onClick(tile.id); }}
-      className={`absolute flex items-center justify-center rounded-xl sm:rounded-[1.5rem] font-light transform-gpu overflow-hidden ${tile.value >= 64 ? 'z-[25]' : ''} ${isTargetable ? 'cursor-pointer hover:scale-[1.02] ring-2 ring-[#6366F1] pointer-events-auto' : ''} ${tile.isGhost ? 'border-2 border-dashed border-white/50 pointer-events-none z-[45] backdrop-blur-[2px]' : ''}`}
+      className={`absolute flex items-center justify-center rounded-xl sm:rounded-[1.5rem] ${fontWeightClass} transform-gpu overflow-hidden ${tile.value >= 64 ? 'z-[25]' : ''} ${isTargetable ? 'cursor-pointer hover:scale-[1.02] ring-2 ring-[#6366F1] pointer-events-auto' : ''} ${tile.isGhost ? 'border-2 border-dashed border-white/50 pointer-events-none z-[45]' : ''}`}
       style={{
           willChange: 'transform, opacity',
           width: tileSizePercent,
           height: tileSizePercent,
           boxShadow: activeShadow,
           zIndex: finalZIndex,
-          fontSize: tile.isVoid ? 'clamp(1.5rem, 5vw, 2rem)' : (tile.value > 999
-                    ? (gridSize >= 6 ? 'clamp(0.8rem, 2.5vw, 1.1rem)' : gridSize >= 5 ? 'clamp(0.9rem, 3vw, 1.3rem)' : 'clamp(1rem, 3.5vw, 1.5rem)') 
-                    : (gridSize >= 6 ? 'clamp(1rem, 3.5vw, 1.3rem)' : gridSize >= 5 ? 'clamp(1.2rem, 4vw, 1.6rem)' : 'clamp(1.3rem, 5vw, 2rem)')),
+          fontSize: tile.isVoid ? safeClamp('1.5rem', '5vw', '2rem') : (tile.value > 999
+                    ? (gridSize >= 6 ? safeClamp('0.8rem', '2.5vw', '1.1rem') : gridSize >= 5 ? safeClamp('0.9rem', '3vw', '1.3rem') : safeClamp('1rem', '3.5vw', '1.5rem')) 
+                    : (gridSize >= 6 ? safeClamp('1rem', '3.5vw', '1.3rem') : gridSize >= 5 ? safeClamp('1.2rem', '4vw', '1.6rem') : safeClamp('1.3rem', '5vw', '2rem'))),
           border: tile.isGhost ? '2px dashed rgba(255,255,255,0.4)' : (tile.isVoid ? '2px solid #9CA3AF' : (levelUpTrigger > 0 ? '1px solid #6366F1' : 'none')),
           ...backgroundStyles
       }}
     >
-      {isTier4 && !tile.isGhost && (
+      {isTier4 && !tile.isGhost && !lowPerformanceMode && (
           <motion.div
-             animate={{ rotate: 360, filter: ['hue-rotate(0deg)', 'hue-rotate(360deg)'] }}
+             animate={{ rotate: 360 }}
              transition={{ 
-                rotate: { duration: 10, repeat: Infinity, ease: "linear" },
-                filter: { duration: 3, repeat: Infinity, ease: "linear" }
+                rotate: { duration: 10, repeat: Infinity, ease: "linear" }
              }}
              className="absolute inset-0 z-0 origin-center mix-blend-overlay opacity-80"
              style={{
+                 willChange: 'transform',
                  background: `conic-gradient(from 0deg, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)`
              }}
           />
       )}
       
-      {tile.isNew && !tile.isGhost && (
+      {tile.isNew && !tile.isGhost && !lowPerformanceMode && (
           <motion.div
               initial={{ opacity: 0.8 }}
               animate={{ opacity: 0 }}
@@ -199,7 +1014,38 @@ const TileComponent = memo(({
       )}
       
       {tile.isVoid ? (
-          <span className="relative z-30 font-light" style={{textShadow: '0 0 10px #9CA3AF'}}>{tile.voidMoves}</span>
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <svg 
+                  className="w-4/5 h-4/5 text-white animate-spin absolute" 
+                  viewBox="0 0 100 100" 
+                  style={{ animationDuration: '24s', opacity: 0.08, willChange: 'transform' }}
+              >
+                  <circle 
+                      cx="50" 
+                      cy="50" 
+                      r="40" 
+                      stroke="currentColor" 
+                      strokeWidth="1.5" 
+                      fill="none" 
+                      strokeDasharray="40 10 90 20 15 15" 
+                      strokeLinecap="round" 
+                  />
+                  <circle 
+                      cx="50" 
+                      cy="50" 
+                      r="30" 
+                      stroke="currentColor" 
+                      strokeWidth="1" 
+                      fill="none" 
+                      strokeDasharray="15 30 10 40" 
+                      strokeLinecap="round" 
+                      style={{ transformOrigin: 'center', transform: 'rotate(-45deg)' }}
+                  />
+              </svg>
+              <span className="relative z-30 font-[100] tracking-tighter" style={{ textShadow: '0 0 12px rgba(255,255,255,0.4)' }}>
+                  {tile.voidMoves}
+              </span>
+          </div>
       ) : (
           <span className="relative z-30">{tile.value}</span>
       )}
@@ -221,36 +1067,47 @@ const TileComponent = memo(({
            prev.tileSizePercent === next.tileSizePercent &&
            prev.levelUpTrigger === next.levelUpTrigger &&
            prev.isHammerActive === next.isHammerActive &&
-           prev.onClick === next.onClick;
+           prev.onClick === next.onClick &&
+           prev.lowPerformanceMode === next.lowPerformanceMode;
 });
 
-const Header = memo(({ score, highScore, scoreMultiplier, onOpenSettings }: { score: number, highScore: number, scoreMultiplier: number, onOpenSettings: () => void }) => (
+const Header = memo(({ score, highScore, scoreMultiplier, onOpenSettings, t }: { score: number, highScore: number, scoreMultiplier: number, onOpenSettings: () => void, t: any }) => (
 <div className="flex justify-between items-start w-full mb-6 relative shrink-0">
     <div className="flex flex-col flex-1 min-w-0 pr-1">
       <h1 className="text-base sm:text-2xl font-light tracking-[0.2em] sm:tracking-[0.3em] opacity-90 pl-1 mt-1 leading-tight whitespace-nowrap">GRID<br/>EVOLUTION</h1>
     </div>
     <div className="flex items-center gap-2 sm:gap-3 shrink-0">
       <div className="flex gap-1.5 sm:gap-2">
-        <div className="bg-white/5 backdrop-blur-sm rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border border-white/5 min-w-[56px] sm:min-w-[70px]">
-          <span className="text-[8px] sm:text-[9px] uppercase tracking-[0.15em] opacity-40 mb-0.5">Score</span>
+        <div 
+          className="bg-white/[0.06] rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border border-white/[0.08] min-w-[56px] sm:min-w-[70px]"
+          style={{ boxShadow: '0 4px 20px -2px rgba(0,0,0,0.3)' }}
+        >
+          <span className="text-[8px] sm:text-[9px] uppercase tracking-[0.15em] opacity-40 mb-0.5">{t.score}</span>
           <div className="flex items-center gap-1">
-              <span className="text-sm sm:text-lg font-[200] leading-none">{score}</span>
+              <span className="text-sm sm:text-lg font-extralight leading-none">{score}</span>
               {scoreMultiplier > 1 && (
-                  <span className="text-[0.6rem] leading-none bg-[#FFD700]/20 text-[#FFD700] px-1 py-0.5 rounded-[4px] font-medium tracking-wider relative -top-[1px]">
+                  <span 
+                      className="text-[0.6rem] leading-none bg-purple-500/10 text-purple-200 border border-purple-500/20 px-1 py-0.5 rounded-[4px] font-medium tracking-wider relative -top-[1px]"
+                      style={{ textShadow: '0 0 8px rgba(168, 85, 247, 0.4), 0 0 12px rgba(6, 182, 212, 0.3)' }}
+                  >
                       {scoreMultiplier}x
                   </span>
               )}
           </div>
         </div>
-        <div className="bg-white/5 backdrop-blur-sm rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border border-white/5 min-w-[56px] sm:min-w-[70px]">
-          <span className="text-[8px] sm:text-[9px] uppercase tracking-[0.15em] opacity-40 mb-0.5">Best</span>
-          <span className="text-sm sm:text-lg font-[200] leading-none">{highScore}</span>
+        <div 
+          className="bg-white/[0.06] rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border border-white/[0.08] min-w-[56px] sm:min-w-[70px]"
+          style={{ boxShadow: '0 4px 20px -2px rgba(0,0,0,0.3)' }}
+        >
+          <span className="text-[8px] sm:text-[9px] uppercase tracking-[0.15em] opacity-40 mb-0.5">{t.best}</span>
+          <span className="text-sm sm:text-lg font-extralight leading-none">{highScore}</span>
         </div>
       </div>
       <motion.button
         whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
         onClick={onOpenSettings}
-        className="p-1.5 sm:p-2 text-white/50 hover:text-white transition-colors bg-white/5 rounded-xl border border-white/5 flex shrink-0"
+        className="p-1.5 sm:p-2 text-white/50 hover:text-white bg-white/[0.06] border border-white/[0.08] rounded-xl flex shrink-0"
+        style={{ transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}
       >
         <SettingsIcon className="w-[18px] h-[18px] sm:w-5 sm:h-5" strokeWidth={1.5} />
       </motion.button>
@@ -272,53 +1129,69 @@ const LevelBar = memo(({ progress, flash }: { progress: number, flash: boolean }
 ));
 
 const Controls = memo(({ undoCount, canUndo, hammerCharge, shuffleCount, onUndo, onClear, onShuffle, onReset, isHammerActive }: any) => (
-  <div className="flex justify-between items-center w-full px-2">
+  <div className="flex justify-between items-center w-full px-2 mt-1 sm:mt-2">
     <div className="flex gap-4 items-center">
       <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
         onClick={onUndo} disabled={undoCount === 0 || !canUndo}
-        className="text-white/40 hover:text-white disabled:opacity-20 transition-colors relative"
+        className="text-white/40 hover:text-white disabled:opacity-20 w-11 h-11 bg-white/[0.06] border border-white/[0.08] rounded-xl flex items-center justify-center relative"
+        style={{ transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}
       >
         <Undo2 size={20} strokeWidth={1.5} />
-        {undoCount > 0 && <span className="absolute -top-1 -right-2 text-[9px] font-bold">{undoCount}</span>}
+        {undoCount > 0 && (
+          <span 
+            className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-white text-black font-light text-[8px] border border-white/20 flex items-center justify-center shadow-lg"
+          >
+            {undoCount}
+          </span>
+        )}
       </motion.button>
       <motion.button whileHover={hammerCharge === 100 ? { scale: 1.1 } : {}} whileTap={hammerCharge === 100 ? { scale: 0.9 } : {}}
         onClick={onClear} disabled={hammerCharge < 100}
-        className={`transition-colors relative flex flex-col items-center justify-center ${
+        className={`relative flex flex-col items-center justify-center w-11 h-11 bg-white/[0.06] border border-white/[0.08] rounded-xl overflow-hidden ${
             isHammerActive 
-                ? 'text-white [text-shadow:0_0_8px_rgba(255,255,255,0.8)]' 
+                ? 'text-[#06B6D4] border-[#06B6D4]/40 [text-shadow:0_0_8px_rgba(6,182,212,0.8)] shadow-[0_0_15px_rgba(6,182,212,0.2)]' 
                 : (hammerCharge === 100 ? 'text-white/80 hover:text-white cursor-pointer' : 'text-white/40 cursor-default')
         }`}
+        style={{ transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}
       >
-        <Hammer size={20} strokeWidth={1.5} className={`mb-0.5 ${hammerCharge === 100 && !isHammerActive ? 'animate-pulse' : ''}`} />
-        <div className="w-[120%] h-[2px] bg-white/10 rounded-full overflow-hidden absolute -bottom-1.5 left-[-10%]">
-            <div className={`h-full transition-all duration-300 ${hammerCharge === 100 ? 'bg-[#6366F1] shadow-[0_0_5px_#6366F1]' : 'bg-[#6366F1]/50'}`} style={{ width: `${hammerCharge}%` }} />
+        <Hammer size={20} strokeWidth={1.5} className={`${hammerCharge === 100 && !isHammerActive ? 'animate-pulse text-[#06B6D4]' : ''}`} />
+        <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/10 overflow-hidden">
+            <div className={`h-full transition-all duration-300 ${hammerCharge === 100 ? 'bg-[#06B6D4] shadow-[0_0_5px_#06B6D4]' : 'bg-[#06B6D4]/50'}`} style={{ width: `${hammerCharge}%` }} />
         </div>
       </motion.button>
       <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
         onClick={onShuffle} disabled={shuffleCount === 0}
-        className="text-white/40 hover:text-white disabled:opacity-20 transition-colors relative"
+        className="text-white/40 hover:text-white disabled:opacity-20 w-11 h-11 bg-white/[0.06] border border-white/[0.08] rounded-xl flex items-center justify-center relative"
+        style={{ transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}
       >
         <Shuffle size={20} strokeWidth={1.5} />
-        {shuffleCount > 0 && <span className="absolute -top-1 -right-2 text-[9px] font-bold">{shuffleCount}</span>}
+        {shuffleCount > 0 && (
+          <span 
+            className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-white text-black font-light text-[8px] border border-white/20 flex items-center justify-center shadow-lg"
+          >
+            {shuffleCount}
+          </span>
+        )}
       </motion.button>
     </div>
 
     <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
       onClick={onReset}
-      className="text-white/40 hover:text-white transition-colors"
+      className="text-white/40 hover:text-white w-11 h-11 bg-white/[0.06] border border-white/[0.08] rounded-xl flex items-center justify-center relative"
+      style={{ transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}
     >
       <RotateCcw size={20} strokeWidth={1.5} />
     </motion.button>
   </div>
 ));
 
-const GridBackground = memo(({ gridSize, tileSizePercent }: { gridSize: number, tileSizePercent: string }) => (
+const GridBackground = memo(({ gridSize, tileSizePercent, lowPerformanceMode }: { gridSize: number, tileSizePercent: string, lowPerformanceMode?: boolean }) => (
   <div className="absolute inset-3 z-0 pointer-events-none">
     {Array.from({ length: gridSize }).map((_, r) => (
       Array.from({ length: gridSize }).map((_, c) => (
         <div
           key={`bg-${r}-${c}`}
-          className="absolute bg-[#1A1A1A] rounded-xl sm:rounded-[1.5rem] shadow-[inset_0_4px_12px_rgba(0,0,0,0.5)]"
+          className={`absolute bg-[#161616] rounded-xl sm:rounded-[1.5rem] ${lowPerformanceMode ? '' : 'shadow-[inset_0_4px_10px_rgba(0,0,0,0.85)]'} border border-white/[0.02]`}
           style={{
             width: tileSizePercent,
             height: tileSizePercent,
@@ -336,11 +1209,12 @@ export interface VFXRef {
   clearEffects: () => void;
 }
 
-const VFXLayer = memo(React.forwardRef<VFXRef, { tileSizePercent: string }>(({ tileSizePercent }, ref) => {
+const VFXLayer = memo(React.forwardRef<VFXRef, { tileSizePercent: string, lowPerformanceMode?: boolean }>(({ tileSizePercent, lowPerformanceMode }, ref) => {
   const [effects, setEffects] = useState<VFXParams[]>([]);
 
   React.useImperativeHandle(ref, () => ({
     addEffects: (newEffects: VFXParams[]) => {
+      if (lowPerformanceMode) return; // Ultra-light: suppress all VFX particles
       setEffects(prev => [...prev, ...newEffects]);
     },
     clearEffects: () => {
@@ -475,6 +1349,49 @@ const VFXParticle = ({ fx, tileSizePercent, onComplete }: { fx: VFXParams, tileS
 // --- Main App Component ---
 
 export default function App() {
+  const [currentLang, setCurrentLang] = useState(() => {
+    const savedLang = localStorage.getItem('grid-evo-lang');
+    if (savedLang && TRANSLATIONS[savedLang]) return savedLang;
+    const detectedLang = typeof navigator !== 'undefined' ? navigator.language.split('-')[0] : 'en';
+    return TRANSLATIONS[detectedLang] ? detectedLang : 'en';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('grid-evo-lang', currentLang);
+  }, [currentLang]);
+
+  // Force native system bars to opaque black on Capacitor/Android
+  // Prevents nav buttons from camouflaging into game background on old tablets/Custom ROMs
+  useEffect(() => {
+    try {
+      const cap = (window as any)?.Capacitor;
+      if (cap?.Plugins?.StatusBar) {
+        cap.Plugins.StatusBar.setBackgroundColor({ color: '#000000' });
+        cap.Plugins.StatusBar.setStyle({ style: 'DARK' });
+        cap.Plugins.StatusBar.setOverlaysWebView({ overlay: false });
+      }
+      if (cap?.Plugins?.NavigationBar) {
+        cap.Plugins.NavigationBar.setColor({ color: '#000000', darkButtons: false });
+      }
+    } catch (_e) { /* Plugin not available â€” graceful degradation */ }
+  }, []);
+
+  const t = useMemo(() => {
+    const targetLanguageObject = TRANSLATIONS[currentLang] || TRANSLATIONS['en'];
+    return new Proxy(targetLanguageObject, {
+      get: (target, prop) => {
+        if (prop in target) {
+          return target[prop as keyof typeof targetLanguageObject];
+        }
+        return TRANSLATIONS['en'][prop as keyof typeof TRANSLATIONS['en']] || prop;
+      }
+    });
+  }, [currentLang]);
+
+  const getTracking = useCallback((standard = 'tracking-[0.2em]', cjk = 'tracking-wide') => {
+    return ['ko', 'ja', 'zh'].includes(currentLang) ? cjk : standard;
+  }, [currentLang]);
+
   const [tiles, setTiles] = useState<TileConfig[]>([]);
   const [score, setScore] = useState<number>(0);
   const [highScore, setHighScore] = useState<number>(0);
@@ -510,6 +1427,29 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('grid-evo-sound') !== 'false');
   const [hapticsEnabled, setHapticsEnabled] = useState(() => localStorage.getItem('grid-evo-haptic') !== 'false');
+  const [lowPerformanceMode, setLowPerformanceMode] = useState(() => {
+    const savedMode = localStorage.getItem('grid-evo-low-perf');
+    if (savedMode !== null) return savedMode === 'true';
+    if (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) {
+      return navigator.hardwareConcurrency <= 4;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('grid-evo-low-perf', String(lowPerformanceMode));
+  }, [lowPerformanceMode]);
+
+  // Post-native loading screen: shows cyber-pastel loader until core game state is ready
+  const [appReady, setAppReady] = useState(false);
+  useEffect(() => {
+    // Allow one frame for React to mount + localStorage reads to settle
+    const raf = requestAnimationFrame(() => {
+      setAppReady(true);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showRecoveryModal, setShowRecoveryModal] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
@@ -580,8 +1520,8 @@ export default function App() {
       if (typeof window !== 'undefined') {
           // Lock to portrait if possible
           try {
-              if (window.screen && window.screen.orientation && window.screen.orientation.lock) {
-                  window.screen.orientation.lock('portrait').catch(() => {});
+              if (window.screen && window.screen.orientation && (window.screen.orientation as any).lock) {
+                  (window.screen.orientation as any).lock('portrait').catch(() => {});
               }
           } catch(e) {}
 
@@ -1097,13 +2037,13 @@ export default function App() {
     }
 
     if (currentLevel > prevLevelRef.current) {
-       let message = `LEVEL ${currentLevel} REACHED!`;
-       
-       if (targetGridSize === 6 && gridSize < 6) {
-         message = 'LEVEL UP: 6x6 GRID UNLOCKED!';
-       } else if (targetGridSize === 5 && gridSize < 5) {
-         message = 'LEVEL UP: 5x5 GRID UNLOCKED!';
-       }
+        let message = t.levelReached.replace('{level}', String(currentLevel));
+        
+        if (targetGridSize === 6 && gridSize < 6) {
+          message = t.levelUpUnlocked6x6;
+        } else if (targetGridSize === 5 && gridSize < 5) {
+          message = t.levelUpUnlocked5x5;
+        }
 
        setLevelUpMessage({ text: message, id: Date.now() });
        setConfetti(Date.now());
@@ -1131,6 +2071,16 @@ export default function App() {
   }, [score, highestLevel, gridSize, levelInfo.level, maxBlock, triggerHaptic]);
 
   const generateSpawnValue = useCallback((lvl: number) => {
+    const rand = Math.random();
+    if (lvl >= 4) {
+      if (rand < 0.05) return 8;  // %5 şansla 8 doğar
+      if (rand < 0.20) return 4;  // %15 şansla 4 doğar (0.05 ile 0.20 arası)
+      return 2;
+    }
+    if (lvl >= 2) {
+      if (rand < 0.10) return 4;  // %10 şansla 4 doğar
+      return 2;
+    }
     return 2;
   }, []);
 
@@ -1211,6 +2161,7 @@ export default function App() {
   }, []);
 
   const ghostTiles = useMemo(() => {
+    if (lowPerformanceMode) return [];
     if (!delayedPreviewDir) return [];
     
     const gSize = gridSize;
@@ -1309,6 +2260,9 @@ export default function App() {
       const dyingTiles: TileConfig[] = [];
       const mergePositions: {r: number, c: number, value: number}[] = [];
       const newEffects: VFXParams[] = [];
+      if (lowPerformanceMode) {
+          newEffects.push = (() => 0) as any;
+      }
 
       const processCell = (r: number, c: number, dr: number, dc: number) => {
         const tile = board[r][c];
@@ -1502,9 +2456,8 @@ export default function App() {
         if (emptySpots.length > 0) {
           const currentLevel = getLevelInfo(scoreRef.current).level;
           let spawnCount = 1;
-          if (emptySpots.length > (gSize * gSize) * 0.70) {
-              spawnCount = 2;
-          }
+          if (gSize === 5) spawnCount = 2; // 5x5 gridde her hamlede 2 taş doğar
+          if (gSize === 6) spawnCount = 3; // 6x6 gridde her hamlede 3 taş doğar
 
           for (let i = 0; i < spawnCount && emptySpots.length > 0; i++) {
               const spotIndex = Math.floor(Math.random() * emptySpots.length);
@@ -1521,7 +2474,7 @@ export default function App() {
               emptySpots.splice(spotIndex, 1);
           }
           
-          const maxVoids = gSize === 4 ? 2 : gSize === 5 ? 3 : 5;
+          const maxVoids = gSize === 4 ? 2 : gSize === 5 ? 4 : 6; // 6x6 gridde aynı anda en fazla 6 void çıkabilsin
           const currentVoids = nextTiles.filter(t => t.isVoid && !t.isDying).length;
           
           if (emptySpots.length > 0 && Math.floor(movesRef.current + 1) % 5 === 0 && currentVoids < maxVoids) {
@@ -1585,88 +2538,86 @@ export default function App() {
           }
         }
 
-        // --- DEFER STATE UPDATES (State Batching) ---
-        setTimeout(() => {
-            requestAnimationFrame(() => {
-                // Entropy updates
-            if (totalInteractions === 0) {
-                if (isEntropyApplied) {
-                    setMovesWithoutMerge(0);
-                } else {
-                    setMovesWithoutMerge(entropyRef.current);
-                }
-            } else {
-                setMovesWithoutMerge(0);
-            }
-
-            setHistory(h => [...h, { tiles: prevTiles, score: scoreRef.current, gridSize: gSize, moves: movesRef.current }].slice(-10));
-            setMoves(m => m + 1);
-            setHammerCharge(prev => {
-                if (prev < 100) {
-                    const next = Math.min(100, prev + 1);
-                    if (next === 100) playHammerReady();
-                    return next;
-                }
-                return prev;
-            });
-
-            if (totalInteractions > 1) {
-              let comboTextStr = '';
-              if (comboMultiplier === 2) comboTextStr = 'DOUBLE';
-              else if (comboMultiplier === 3) comboTextStr = 'TRIPLE';
-              else if (comboMultiplier === 4) comboTextStr = 'QUADRUPLE';
-              else if (comboMultiplier === 5) comboTextStr = 'PENTA';
-              else if (comboMultiplier >= 6) comboTextStr = 'HEXA EVOLUTION';
-
-              if (comboMultiplier >= 6) {
-                  setHexaGlow(true);
-                  setTimeout(() => setHexaGlow(false), 1000);
-              }
-
-              setComboMessage({ text: comboTextStr, id: Date.now(), count: comboMultiplier });
-              const duration = comboMultiplier >= 6 ? 4000 : 1000 + (comboMultiplier * 300);
-              setTimeout(() => setComboMessage(null), duration);
-            }
-
-            setScore(s => {
-              const newScore = s + finalScoreUpdate;
-              setHighScore(h => {
-                 if (newScore > h && h > 0 && newScore - h > 1000) {
-                     triggerStoreReview('high_score');
-                 }
-                 const best = Math.max(h, newScore);
-                 localStorage.setItem('grid-evo-highscore-pastel', best.toString());
-                 return best;
-              });
-              return newScore;
-            });
-
-            const nextValidState = nextTiles.filter(t => !t.isDying);
-            const currentMaxBlock = Math.max(...nextValidState.filter(t => !t.isVoid).map(t => t.value), 2);
-            setMaxBlock(prev => Math.max(prev, currentMaxBlock));
-
-            if (checkGameOver(nextValidState, gSize)) {
-               setGameOver(true);
-               const nextScore = scoreRef.current + finalScoreUpdate;
-               const isRecord = nextScore > highScore;
-               setGameOverStats({
-                   isNewRecord: isRecord,
-                   maxBlock: Math.max(...nextValidState.map(t => t.value)),
-                   finalMoves: movesRef.current + 1,
-                   finalLevel: getLevelInfo(nextScore).level,
-                   longestCombo: Math.max(longestCombo, mergesInMove)
-               });
-               if (isRecord) setConfetti(Date.now());
-            }
-            });
-        }, 50);
-
+        // --- DEFER STATE UPDATES (Single Batched Update at 160ms) ---
         const dyingIds = new Set(dyingTiles.map(t => t.id));
+        const delayTime = lowPerformanceMode ? 0 : 160;
         setTimeout(() => {
             requestAnimationFrame(() => {
+                // Clean up dying tiles first
                 setTiles(current => current.filter(t => !dyingIds.has(t.id)));
+
+                // Entropy updates
+                if (totalInteractions === 0) {
+                    if (isEntropyApplied) {
+                        setMovesWithoutMerge(0);
+                    } else {
+                        setMovesWithoutMerge(entropyRef.current);
+                    }
+                } else {
+                    setMovesWithoutMerge(0);
+                }
+
+                setHistory(h => [...h, { tiles: prevTiles, score: scoreRef.current, gridSize: gSize, moves: movesRef.current }].slice(-10));
+                setMoves(m => m + 1);
+                setHammerCharge(prev => {
+                    if (prev < 100) {
+                        const next = Math.min(100, prev + 1);
+                        if (next === 100) playHammerReady();
+                        return next;
+                    }
+                    return prev;
+                });
+
+                if (totalInteractions > 1) {
+                  let comboTextStr = '';
+                  if (comboMultiplier === 2) comboTextStr = t.double;
+                  else if (comboMultiplier === 3) comboTextStr = t.triple;
+                  else if (comboMultiplier === 4) comboTextStr = t.quadruple;
+                  else if (comboMultiplier === 5) comboTextStr = t.penta;
+                  else if (comboMultiplier >= 6) comboTextStr = t.hexa;
+
+                  if (comboMultiplier >= 6) {
+                      setHexaGlow(true);
+                      setTimeout(() => setHexaGlow(false), 1000);
+                  }
+
+                  setComboMessage({ text: comboTextStr, id: Date.now(), count: comboMultiplier });
+                  const duration = comboMultiplier >= 6 ? 4000 : 1000 + (comboMultiplier * 300);
+                  setTimeout(() => setComboMessage(null), duration);
+                }
+
+                setScore(s => {
+                  const newScore = s + finalScoreUpdate;
+                  setHighScore(h => {
+                     if (newScore > h && h > 0 && newScore - h > 1000) {
+                         triggerStoreReview('high_score');
+                     }
+                     const best = Math.max(h, newScore);
+                     localStorage.setItem('grid-evo-highscore-pastel', best.toString());
+                     return best;
+                  });
+                  return newScore;
+                });
+
+                const nextValidState = nextTiles.filter(t => !t.isDying);
+                const currentMaxBlock = Math.max(...nextValidState.filter(t => !t.isVoid).map(t => t.value), 2);
+                setMaxBlock(prev => Math.max(prev, currentMaxBlock));
+
+                if (checkGameOver(nextValidState, gSize)) {
+                   setGameOver(true);
+                   const nextScore = scoreRef.current + finalScoreUpdate;
+                   const isRecord = nextScore > highScore;
+                   setGameOverStats({
+                       isNewRecord: isRecord,
+                       maxBlock: Math.max(...nextValidState.map(t => t.value)),
+                       finalMoves: movesRef.current + 1,
+                       finalLevel: getLevelInfo(nextScore).level,
+                       longestCombo: Math.max(longestCombo, mergesInMove)
+                   });
+                   if (isRecord) setConfetti(Date.now());
+                }
             });
-        }, 160);
+        }, delayTime);
         
         if (newEffects.length > 0) {
             requestAnimationFrame(() => {
@@ -1810,7 +2761,6 @@ export default function App() {
   }, [confetti]);
 
   const onTouchStart = (e: React.TouchEvent | React.MouseEvent) => {
-    // Pre-warm audio and haptics on physical interaction
     if (soundEnabled) getAudioCtx();
 
     if (gameOver || isSettingsOpen || showInfoModal) return;
@@ -1823,10 +2773,11 @@ export default function App() {
 
   const onTouchMove = (e: React.TouchEvent | React.MouseEvent) => {
     if (touchStart) {
-        if ('touches' in e) e.preventDefault(); // Prevent scrolling on touch
+        if ('touches' in e) e.preventDefault();
         
         if (!('touches' in e) && !isMouseDown) return;
 
+        if (lowPerformanceMode) return;
         const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
         const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
 
@@ -1845,9 +2796,40 @@ export default function App() {
     }
   };
 
-  const onTouchEnd = () => {
-    if (touchStart && previewDir) {
-      handleMove(previewDir.r, previewDir.c);
+  const onTouchEnd = (e?: React.TouchEvent | React.MouseEvent) => {
+    if (touchStart) {
+        if (lowPerformanceMode && e) {
+            let clientX: number | undefined;
+            let clientY: number | undefined;
+
+            if ('changedTouches' in e && e.changedTouches.length > 0) {
+                clientX = e.changedTouches[0].clientX;
+                clientY = e.changedTouches[0].clientY;
+            } else if ('touches' in e && e.touches.length > 0) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else if ('clientX' in e) {
+                clientX = (e as React.MouseEvent).clientX;
+                clientY = (e as React.MouseEvent).clientY;
+            }
+
+            if (clientX !== undefined && clientY !== undefined) {
+                const dx = clientX - touchStart.x;
+                const dy = clientY - touchStart.y;
+
+                let dir: { r: number, c: number } | null = null;
+                if (Math.abs(dx) > Math.abs(dy)) {
+                  if (Math.abs(dx) > 15) dir = dx > 0 ? { r: 0, c: 1 } : { r: 0, c: -1 };
+                } else {
+                  if (Math.abs(dy) > 15) dir = dy > 0 ? { r: 1, c: 0 } : { r: -1, c: 0 };
+                }
+                if (dir) {
+                    handleMove(dir.r, dir.c);
+                }
+            }
+        } else if (previewDir) {
+            handleMove(previewDir.r, previewDir.c);
+        }
     }
     setTouchStart(null);
     setPreviewDir(null);
@@ -1862,14 +2844,41 @@ export default function App() {
 
   const tileSizePercent = useMemo(() => `calc((100% - ${(gridSize - 1) * 12}px) / ${gridSize})`, [gridSize]);
 
+  // Loading screen for slow tablets â€” shows while core state initializes
+  if (!appReady) {
+    return (
+      <div className="h-screen w-full flex flex-col items-center justify-center bg-[#1E1E1E] font-sans text-white select-none">
+        {/* Pulsing diamond outline */}
+        <motion.div
+          animate={{ opacity: [0.3, 0.8, 0.3], scale: [0.95, 1.05, 0.95] }}
+          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          className="mb-10"
+        >
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="12" y="12" width="40" height="40" rx="8" stroke="rgba(168,162,158,0.5)" strokeWidth="1.5" transform="rotate(45 32 32)" fill="none" />
+            <rect x="20" y="20" width="24" height="24" rx="4" stroke="rgba(168,162,158,0.3)" strokeWidth="1" transform="rotate(45 32 32)" fill="none" />
+          </svg>
+        </motion.div>
+        <motion.p
+          animate={{ opacity: [0.4, 0.9, 0.4] }}
+          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          className="text-[10px] font-light tracking-[0.35em] uppercase text-white/50"
+        >
+          {t.loadingText}
+        </motion.p>
+      </div>
+    );
+  }
+
   return (
     <motion.div
+      dir={currentLang === 'ar' ? 'rtl' : 'ltr'}
       animate={{ backgroundColor: getBackgroundColor(gridSize) }}
       transition={{ duration: 0.8, ease: "easeOut" }}
-      className="h-[100dvh] w-full flex flex-col items-center font-sans text-white overflow-hidden relative overscroll-none select-none touch-none"
+      className="h-screen w-full flex flex-col items-center font-sans text-white overflow-hidden relative overscroll-none select-none"
       style={{
-          paddingTop: 'max(env(safe-area-inset-top), 1.5rem)',
-          paddingBottom: 'max(env(safe-area-inset-bottom), 1.5rem)'
+          paddingTop: '1.5rem',
+          paddingBottom: '1.5rem'
       }}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
@@ -1879,11 +2888,11 @@ export default function App() {
       onMouseUp={onTouchEnd}
       onMouseLeave={onTouchEnd}
     >
-      <div className="mobile-landscape-warning absolute inset-0 z-[200] hidden bg-[#121212] items-center justify-center flex-col text-center p-6 h-[100dvh]">
+      <div className="mobile-landscape-warning absolute inset-0 z-[200] hidden bg-[#121212] items-center justify-center flex-col text-center p-6 h-screen">
           <AlertTriangle size={48} className="text-[#6366F1] mb-6"/>
-          <h2 className="text-xl font-light tracking-[0.2em] mb-3 uppercase">Rotate Device</h2>
+          <h2 className="text-xl font-light tracking-[0.2em] mb-3 uppercase">{t.rotateDevice}</h2>
           <p className="text-sm text-white/60 font-light tracking-widest leading-relaxed max-w-sm">
-             Grid Evolution is designed to be played in portrait mode. Please rotate your phone to continue.
+             {t.warningText}
           </p>
       </div>
 
@@ -1892,7 +2901,7 @@ export default function App() {
         {showExitConfirm && (
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="absolute inset-0 z-[100] bg-[#121212]/90 backdrop-blur-lg flex flex-col items-center justify-center p-6"
+            className={`absolute inset-0 z-[100] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/90 backdrop-blur-lg'} flex flex-col items-center justify-center p-6`}
           >
             <motion.div
               initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
@@ -1901,30 +2910,29 @@ export default function App() {
               <div className="w-16 h-16 bg-red-400/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
                 <AlertTriangle size={32} className="text-red-400" />
               </div>
-              <h2 className="text-xl font-light tracking-[0.2em] mb-3 text-white uppercase">Wait!</h2>
-              <p className="text-xs text-white/40 font-light tracking-widest leading-relaxed mb-8">
-                Are you sure you want to exit?
+              <h2 className={`text-xl font-light mb-3 text-white uppercase ${getTracking("tracking-[0.2em]", "tracking-wide")}`}>{t.wait}</h2>
+              <p className={`text-xs text-white/40 font-light leading-relaxed mb-8 ${getTracking("tracking-widest", "tracking-normal")}`}>
+                {t.areYouSureExit}
               </p>
-
+ 
               <div className="flex flex-col gap-3">
                 <button
                   onClick={() => {
                       if ((window as any)?.Capacitor?.Plugins?.App) {
                           (window as any).Capacitor.Plugins.App.exitApp();
                       } else {
-                         // On web, we cannot reliably close the tab. Just close the modal.
                          setShowExitConfirm(false);
                       }
                   }}
-                  className="w-full py-4 bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 rounded-2xl text-xs tracking-[0.2em] uppercase font-light transition-colors"
+                  className={`w-full py-4 bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                 >
-                  Exit App
+                  {t.exitApp}
                 </button>
                 <button
                   onClick={() => setShowExitConfirm(false)}
-                  className="w-full py-4 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white rounded-2xl text-xs tracking-[0.2em] uppercase font-light transition-colors"
+                  className={`w-full py-4 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                 >
-                  Keep Playing
+                  {t.keepPlaying}
                 </button>
               </div>
             </motion.div>
@@ -1937,7 +2945,7 @@ export default function App() {
         {showRecoveryModal && (
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="absolute inset-0 z-[100] bg-[#121212]/90 backdrop-blur-lg flex flex-col items-center justify-center p-6"
+            className={`absolute inset-0 z-[100] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/90 backdrop-blur-lg'} flex flex-col items-center justify-center p-6`}
           >
             <motion.div
               initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
@@ -1946,23 +2954,24 @@ export default function App() {
               <div className="w-16 h-16 bg-[#A2D2FF]/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
                 <RotateCcw size={32} className="text-[#A2D2FF]" />
               </div>
-              <h2 className="text-xl font-light tracking-[0.2em] mb-3 uppercase">Welcome Back</h2>
-              <p className="text-xs text-white/40 font-light tracking-widest leading-relaxed mb-8">
-                You have an unfinished game.<br/>Would you like to continue?
-              </p>
+              <h2 className="text-xl font-light tracking-[0.2em] mb-3 uppercase">{t.welcomeBack}</h2>
+              <p 
+                className="text-xs text-white/40 font-light tracking-widest leading-relaxed mb-8"
+                dangerouslySetInnerHTML={{ __html: t.recoveryText }}
+              />
 
               <div className="flex flex-col gap-3">
                 <button
                   onClick={loadSavedGame}
-                  className="w-full py-4 bg-white text-black rounded-2xl text-xs tracking-[0.2em] uppercase font-light transition-transform active:scale-95 shadow-xl"
+                  className={`w-full py-4 bg-white text-black rounded-2xl text-xs uppercase font-light transition-transform active:scale-95 shadow-xl ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                 >
-                  Continue Game
+                  {t.continueGame}
                 </button>
                 <button
                   onClick={discardSavedGame}
-                  className="w-full py-4 bg-white/5 hover:bg-white/10 text-white/60 rounded-2xl text-xs tracking-[0.2em] uppercase font-light transition-colors border border-white/5"
+                  className={`w-full py-4 bg-white/5 hover:bg-white/10 text-white/60 rounded-2xl text-xs uppercase font-light transition-colors border border-white/5 ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                 >
-                  Start New
+                  {t.startNew}
                 </button>
               </div>
             </motion.div>
@@ -2018,7 +3027,7 @@ export default function App() {
         {showInfoModal && (
           <motion.div
              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-             className="absolute inset-0 z-[70] bg-[#121212]/80 backdrop-blur-md flex flex-col items-center justify-center p-6"
+             className={`absolute inset-0 z-[70] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/80 backdrop-blur-md'} flex flex-col items-center justify-center p-6`}
           >
              <div className="bg-[#050505] rounded-3xl w-full max-w-[320px] p-8 shadow-2xl border border-white/5 relative flex flex-col items-center text-center">
                 
@@ -2031,9 +3040,9 @@ export default function App() {
                          <div className="text-white/50 animate-pulse text-xl ml-1 mr-1">=</div>
                          <div className="w-12 h-12 bg-[#DCEDC8] text-[#33691E] rounded-xl flex items-center justify-center text-xl font-bold shadow-[0_0_15px_rgba(220,237,200,0.4)]">4</div>
                      </div>
-                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">THE CORE MECHANIC</h3>
+                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">{t.step1Title}</h3>
                      <p className="text-white/80 font-extralight text-sm leading-relaxed tracking-wide">
-                        Swipe to slide all tiles. When two tiles with the same value collide, they MERGE into a single, higher-value tile to evolve the grid.
+                        {t.step1Desc}
                      </p>
                   </motion.div>
                 )}
@@ -2043,9 +3052,9 @@ export default function App() {
                      <div className="w-16 h-16 rounded-xl border border-[#F87171]/30 shadow-[inset_0_0_20px_rgba(248,113,113,0.3)] mb-6 flex items-center justify-center animate-pulse">
                          <AlertTriangle size={28} className="text-[#F87171]" />
                      </div>
-                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">ENTROPY & DEGRADATION</h3>
+                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">{t.step2Title}</h3>
                      <p className="text-white/80 font-extralight text-sm leading-relaxed tracking-wide">
-                        ENTROPY ALERT! If no merges occur for 7 moves (decreases as you level up), your highest tile loses half its value. Keep moving!
+                        {t.step2Desc}
                      </p>
                   </motion.div>
                 )}
@@ -2055,9 +3064,9 @@ export default function App() {
                      <div className="w-16 h-16 bg-[#1A1A1A] rounded-[1.5rem] border border-[#9CA3AF]/40 mb-6 flex items-center justify-center font-extralight text-[#9CA3AF] text-3xl">
                          5
                      </div>
-                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">TEMPORAL VOIDS</h3>
+                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">{t.step3Title}</h3>
                      <p className="text-white/80 font-extralight text-sm leading-relaxed tracking-wide">
-                        TEMPORAL VOIDS! These areas appearing in the center of the grid restrict your movements. You cannot pass through until the timer runs out.
+                        {t.step3Desc}
                      </p>
                   </motion.div>
                 )}
@@ -2067,9 +3076,9 @@ export default function App() {
                      <div className="w-16 h-16 rounded-xl border border-[#6366F1]/40 shadow-[0_0_15px_rgba(99,102,241,0.5)] mb-6 flex items-center justify-center bg-[#6366F1]/10">
                          <Hammer size={28} className="text-[#6366F1]" />
                      </div>
-                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">THE MANUAL HAMMER</h3>
+                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">{t.step4Title}</h3>
                      <p className="text-white/80 font-extralight text-sm leading-relaxed tracking-wide">
-                        STRATEGIC INTERVENTION! When fully charged, select the hammer and destroy any tile on the grid. Successful moves charge the hammer.
+                        {t.step4Desc}
                      </p>
                   </motion.div>
                 )}
@@ -2079,9 +3088,9 @@ export default function App() {
                      <div className="mb-6 flex items-center justify-center border border-white/10 rounded-xl p-3 bg-white/5">
                         <Grid size={42} strokeWidth={1} className="text-[#9CA3AF] animate-pulse" />
                      </div>
-                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">SCALING CHALLENGE</h3>
+                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">{t.step5Title}</h3>
                      <p className="text-white/80 font-extralight text-sm leading-relaxed tracking-wide">
-                        THE GRID EXPANDS! As you level up, the area grows, voids increase, and Entropy time shrinks. Can you reach the limit?
+                        {t.step5Desc}
                      </p>
                   </motion.div>
                 )}
@@ -2090,9 +3099,9 @@ export default function App() {
                    {infoStep > 1 && (
                       <button 
                          onClick={() => setInfoStep(s => s - 1)}
-                         className="flex-1 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 font-light tracking-[0.15em] text-xs transition-colors uppercase"
+                         className={`flex-1 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 font-light text-xs transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}
                       >
-                         BACK
+                         {t.back}
                       </button>
                    )}
                    <button 
@@ -2104,9 +3113,9 @@ export default function App() {
                              setShowInfoModal(false);
                          }
                       }}
-                      className="flex-[2] py-3.5 rounded-xl bg-[#6366F1]/20 hover:bg-[#6366F1]/30 text-[#6366F1] font-light tracking-[0.15em] text-xs transition-colors uppercase"
+                      className={`flex-[2] py-3.5 rounded-xl bg-[#6366F1]/20 hover:bg-[#6366F1]/30 text-[#6366F1] font-light text-xs transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}
                    >
-                      {infoStep < 5 ? 'NEXT' : 'START'}
+                      {infoStep < 5 ? t.next : t.start}
                    </button>
                 </div>
              </div>
@@ -2122,7 +3131,7 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.6 }}
-            className="fixed inset-0 z-[200] bg-[#050505]/80 backdrop-blur-xl flex flex-col items-center justify-between py-12 px-6"
+            className={`fixed inset-0 z-[200] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#050505]/80 backdrop-blur-xl'} flex flex-col items-center justify-between py-12 px-6`}
           >
             {/* Header */}
             <motion.div 
@@ -2131,8 +3140,8 @@ export default function App() {
                transition={{ delay: 0.2, duration: 0.8 }}
                className="mt-8 text-center"
             >
-               <h1 className="text-xl md:text-2xl font-black text-[#6366F1] tracking-[0.3em] uppercase [text-shadow:0_0_15px_rgba(99,102,241,0.5)]">
-                 EVOLUTION HALTED
+               <h1 className={`text-xl md:text-2xl font-black text-[#6366F1] uppercase [text-shadow:0_0_15px_rgba(99,102,241,0.5)] ${getTracking("tracking-[0.3em]", "tracking-wider")}`}>
+                 {t.evolutionHalted}
                </h1>
             </motion.div>
 
@@ -2149,16 +3158,16 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 1 }}
-                      className="absolute -top-6 bg-[#FFE082]/10 border border-[#FFE082]/30 text-[#FFE082] px-4 py-1 text-[10px] sm:text-xs font-bold tracking-[0.2em] rounded-full uppercase shadow-[0_0_20px_rgba(255,224,130,0.3)] whitespace-nowrap"
+                      className={`absolute -top-6 bg-[#FFE082]/10 border border-[#FFE082]/30 text-[#FFE082] px-4 py-1 text-[10px] sm:text-xs font-bold rounded-full uppercase shadow-[0_0_20px_rgba(255,224,130,0.3)] whitespace-nowrap ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                     >
-                      New Record!
+                      {t.newRecord}
                     </motion.div>
                   )}
                   <div className="text-[4rem] sm:text-[5rem] font-light leading-none tracking-tight text-white [text-shadow:0_0_25px_rgba(255,224,130,0.2)]">
                      {score}
                   </div>
-                  <div className="text-sm tracking-[0.3em] text-white/40 mt-2 uppercase font-light">
-                     Final Score
+                  <div className={`text-sm mt-2 uppercase font-light text-white/40 ${getTracking("tracking-[0.3em]", "tracking-wider")}`}>
+                     {t.finalScore}
                   </div>
                </motion.div>
 
@@ -2170,23 +3179,23 @@ export default function App() {
                  className="grid grid-cols-2 gap-4 w-full px-2"
                >
                   <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-[#FFE082]/70 uppercase">Largest Block</span>
+                     <span className="text-[10px] tracking-widest text-[#FFE082]/70 uppercase">{t.largestBlock}</span>
                      <span className="text-xl font-light text-white">{gameOverStats.maxBlock}</span>
                   </div>
                   <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-white/40 uppercase">Total Moves</span>
+                     <span className="text-[10px] tracking-widest text-white/40 uppercase">{t.totalMoves}</span>
                      <span className="text-xl font-light text-white">{gameOverStats.finalMoves}</span>
                   </div>
                   <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-white/40 uppercase">Efficiency</span>
+                     <span className="text-[10px] tracking-widest text-white/40 uppercase">{t.efficiency}</span>
                      <span className="text-xl font-light text-white">{gameOverStats.finalMoves > 0 ? (score / gameOverStats.finalMoves).toFixed(1) : 0}</span>
                   </div>
                   <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-white/40 uppercase">Longest Combo</span>
+                     <span className="text-[10px] tracking-widest text-white/40 uppercase">{t.longestCombo}</span>
                      <span className="text-xl font-light text-white tracking-wider">{gameOverStats.longestCombo}</span>
                   </div>
                   <div className="col-span-2 bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-[#6366F1]/70 uppercase">Evolution Level</span>
+                     <span className="text-[10px] tracking-widest text-[#6366F1]/70 uppercase">{t.evolutionLevel}</span>
                      <span className="text-xl font-light text-white">{gameOverStats.finalLevel}</span>
                   </div>
                </motion.div>
@@ -2201,19 +3210,23 @@ export default function App() {
             >
                <button 
                   onClick={initializeGame} 
-                  className="w-full py-4 bg-white text-black hover:bg-white/90 rounded-2xl text-xs sm:text-sm tracking-[0.2em] font-light uppercase transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] flex items-center justify-center gap-3 active:scale-[0.98]"
+                  className={`w-full py-4 bg-white text-black hover:bg-white/90 rounded-2xl text-xs sm:text-sm font-light uppercase transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                >
-                  <RotateCcw size={18} strokeWidth={1.5} /> Retry
+                  <RotateCcw size={18} strokeWidth={1.5} /> {t.retry}
                </button>
                <button 
                   onClick={() => {
-                     const text = `I reached Level ${gameOverStats.finalLevel} with ${score} points in Grid Evolution!\nLargest block: ${gameOverStats.maxBlock}\nMoves: ${gameOverStats.finalMoves}`;
+                     const text = t.shareMessage
+                        .replace('{level}', String(gameOverStats.finalLevel))
+                        .replace('{score}', String(score))
+                        .replace('{maxBlock}', String(gameOverStats.maxBlock))
+                        .replace('{moves}', String(gameOverStats.finalMoves));
                      if (navigator.share) navigator.share({ title: 'Grid Evolution Stats', text }).catch(err=>console.log(err));
                      else { navigator.clipboard.writeText(text); alert('Stats copied to clipboard!'); }
                   }}
-                  className="w-full py-4 bg-transparent border border-white/10 text-white/80 hover:text-white hover:bg-white/5 rounded-2xl text-xs sm:text-sm tracking-[0.2em] font-light uppercase transition-all flex items-center justify-center gap-3 active:scale-[0.98]"
+                  className={`w-full py-4 bg-transparent border border-white/10 text-white/80 hover:text-white hover:bg-white/5 rounded-2xl text-xs sm:text-sm font-light uppercase transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                >
-                  <Share2 size={16} strokeWidth={1.5} /> Share Results
+                  <Share2 size={16} strokeWidth={1.5} /> {t.shareResults}
                </button>
             </motion.div>
 
@@ -2226,27 +3239,59 @@ export default function App() {
         {isSettingsOpen && (
           <motion.div
              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-             className="absolute inset-0 z-[60] bg-[#121212]/80 backdrop-blur-md flex flex-col items-center justify-center p-6"
+             className={`absolute inset-0 z-[60] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/80 backdrop-blur-md'} flex flex-col items-center justify-center p-6`}
           >
             <div className="bg-[#050505] rounded-3xl w-full max-w-[320px] p-6 shadow-2xl border border-white/5 relative">
                <button onClick={() => setIsSettingsOpen(false)} className="absolute top-5 right-5 text-white/40 hover:text-white transition-colors">
                  <X size={20}/>
                </button>
-               <h3 className="text-lg font-light tracking-[0.2em] text-center mb-8 mt-2 uppercase">Settings</h3>
+               <h3 className="text-lg font-light tracking-[0.2em] text-center mb-8 mt-2 uppercase">{t.settings}</h3>
                
                <div className="flex justify-between items-center mb-6 px-2">
-                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Volume2 size={18}/> Sound</span>
+                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Volume2 size={18}/> {t.sound}</span>
                   <button onClick={() => setSoundEnabled(!soundEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${soundEnabled ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
                      <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${soundEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
                   </button>
                </div>
                
                <div className="flex justify-between items-center mb-8 px-2">
-                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Vibrate size={18}/> Haptics</span>
+                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Vibrate size={18}/> {t.haptics}</span>
                   <button onClick={() => setHapticsEnabled(!hapticsEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${hapticsEnabled ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
                      <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${hapticsEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
                   </button>
                </div>
+
+                <div className="flex justify-between items-center mb-8 px-2">
+                   <span className="font-light tracking-wide opacity-80 flex items-center gap-3">
+                      <Grid size={18} />
+                      {t.language}
+                   </span>
+                   <select
+                      value={currentLang}
+                      onChange={(e) => setCurrentLang(e.target.value)}
+                      className="bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs font-light tracking-wide text-white/80 focus:outline-none focus:ring-1 focus:ring-[#06B6D4] cursor-pointer"
+                   >
+                      <option value="en" className="bg-[#050505] text-white">English</option>
+                      <option value="tr" className="bg-[#050505] text-white">Türkçe</option>
+                      <option value="de" className="bg-[#050505] text-white">Deutsch</option>
+                      <option value="pl" className="bg-[#050505] text-white">Polski</option>
+                      <option value="es" className="bg-[#050505] text-white">Español</option>
+                      <option value="fr" className="bg-[#050505] text-white">Français</option>
+                      <option value="ru" className="bg-[#050505] text-white">Русский</option>
+                      <option value="it" className="bg-[#050505] text-white">Italiano</option>
+                      <option value="ko" className="bg-[#050505] text-white">한국어</option>
+                      <option value="ja" className="bg-[#050505] text-white">日本語</option>
+                      <option value="zh" className="bg-[#050505] text-white">简体中文</option>
+                      <option value="ar" className="bg-[#050505] text-white">العربية</option>
+                   </select>
+                </div>
+
+               <div className="flex justify-between items-center mb-8 px-2">
+                   <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Zap size={18}/> {t.reduceEffects}</span>
+                   <button onClick={() => setLowPerformanceMode(!lowPerformanceMode)} className={`w-12 h-6 rounded-full relative transition-colors ${lowPerformanceMode ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
+                      <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${lowPerformanceMode ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
+                   </button>
+                </div>
 
                <div className="border-t border-white/5 pt-6 mt-2 flex flex-col gap-3">
                   <button 
@@ -2255,20 +3300,20 @@ export default function App() {
                         setShowInfoModal(true);
                         setInfoStep(1);
                      }}
-                     className="w-full py-3.5 rounded-xl bg-white/5 text-white/90 font-light tracking-[0.15em] text-xs hover:bg-white/10 transition-colors uppercase"
+                     className={`w-full py-3.5 rounded-xl bg-white/5 text-white/90 font-light text-xs hover:bg-white/10 transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}
                   >
-                     HOW TO PLAY
+                     {t.howToPlay}
                   </button>
                   {!showResetConfirm ? (
-                     <button onClick={() => setShowResetConfirm(true)} className="w-full py-3.5 rounded-xl bg-red-500/10 text-red-400 font-light tracking-[0.15em] text-xs hover:bg-red-500/20 transition-colors uppercase">Reset Progress</button>
+                     <button onClick={() => setShowResetConfirm(true)} className={`w-full py-3.5 rounded-xl bg-red-500/10 text-red-400 font-light text-xs hover:bg-red-500/20 transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}>{t.resetProgress}</button>
                   ) : (
                      <div className="flex flex-col gap-3">
                          <span className="text-center text-xs text-red-400 font-light tracking-widest flex items-center justify-center gap-2">
-                           <AlertTriangle size={14} /> Are you sure?
+                           <AlertTriangle size={14} /> {t.areYouSure}
                          </span>
                          <div className="flex gap-3">
-                             <button onClick={handleHardReset} className="flex-1 py-3 rounded-xl bg-red-500/80 hover:bg-red-500 text-white font-light tracking-widest text-xs transition-colors">YES</button>
-                             <button onClick={() => setShowResetConfirm(false)} className="flex-1 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white/80 font-light tracking-widest text-xs transition-colors">NO</button>
+                             <button onClick={handleHardReset} className={`flex-1 py-3 rounded-xl bg-red-500/80 hover:bg-red-500 text-white font-light text-xs transition-colors ${getTracking("tracking-widest", "tracking-normal")}`}>{t.yes}</button>
+                             <button onClick={() => setShowResetConfirm(false)} className={`flex-1 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white/80 font-light text-xs transition-colors ${getTracking("tracking-widest", "tracking-normal")}`}>{t.no}</button>
                          </div>
                      </div>
                   )}
@@ -2280,11 +3325,11 @@ export default function App() {
 
       <div className="flex flex-col w-full h-full max-w-[500px]">
         <div className="flex flex-col w-full px-4 pt-2 pb-2 shrink-0 z-20">
-            <Header score={score} highScore={highScore} scoreMultiplier={scoreMultiplier} onOpenSettings={() => setIsSettingsOpen(true)} />
+            <Header score={score} highScore={highScore} scoreMultiplier={scoreMultiplier} onOpenSettings={() => setIsSettingsOpen(true)} t={t} />
             <LevelBar progress={levelInfo.xp / levelInfo.requiredXp} flash={flashBar} />
 
             {/* Combo Message (Relocated between Level Bar and Controls) */}
-            <div className="h-8 flex items-center justify-center relative">
+            <div className="h-10 sm:h-12 mb-1 sm:mb-2 flex items-center justify-center relative">
               <AnimatePresence>
                   {comboMessage && !levelUpMessage && (
                     <motion.div
@@ -2297,34 +3342,18 @@ export default function App() {
                       style={{ willChange: 'opacity, transform' }}
                     >
                       <div 
-                        className={`px-4 py-1 rounded-full font-medium tracking-[0.2em] uppercase border backdrop-blur-sm transition-all ${comboMessage.count && comboMessage.count >= 6 ? 'border-white/20 bg-white/5 text-white' : 'text-[#6366F1] border-[#6366F1]/40 bg-[#6366F1]/10'}`}
+                        className="px-4 py-1 rounded-full font-medium tracking-[0.2em] uppercase border border-white/20 bg-white/5 text-white transition-all"
                         style={{
                             fontSize: comboMessage.count && comboMessage.count > 2 ? `${1 + Math.min(comboMessage.count - 2, 4) * 0.2}rem` : '1rem',
-                            boxShadow: comboMessage.count && comboMessage.count >= 6 ? `0 0 30px rgba(255,255,255,0.15)` : (comboMessage.count && comboMessage.count > 2 ? `0 0 ${15 + (comboMessage.count - 2)*10}px rgba(99,102,241,0.6)` : '0 0 15px rgba(99,102,241,0.4)'),
-                            textShadow: comboMessage.count && comboMessage.count >= 6 ? `none` : (comboMessage.count && comboMessage.count > 2 ? `0 0 ${8 + (comboMessage.count - 2)*5}px rgba(99,102,241,0.8)` : 'none')
+                            boxShadow: (comboMessage.count && comboMessage.count >= 6)
+                                ? '0 0 30px rgba(239, 68, 68, 0.6), inset 0 0 10px rgba(239, 68, 68, 0.3)'
+                                : `0 0 ${15 + (comboMessage.count - 2) * 8}px rgba(255, 145, 0, 0.6), inset 0 0 8px rgba(255, 145, 0, 0.3)`,
+                            textShadow: (comboMessage.count && comboMessage.count >= 6)
+                                ? '0 0 12px rgba(239, 68, 68, 0.9)'
+                                : `0 0 ${6 + (comboMessage.count - 2) * 3}px rgba(255, 145, 0, 0.9)`
                         }}
                       >
-                        {comboMessage.count && comboMessage.count >= 6 ? (
-                           <motion.span
-                             animate={{ 
-                               filter: [
-                                 'hue-rotate(0deg)', 
-                                 'hue-rotate(360deg)'
-                               ] 
-                             }}
-                             transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-                             style={{
-                               backgroundImage: 'linear-gradient(to right, #EF4444, #F97316, #EAB308, #22C55E, #3B82F6, #6366F1, #A855F7)',
-                               WebkitBackgroundClip: 'text',
-                               WebkitTextFillColor: 'transparent',
-                               display: 'inline-block',
-                             }}
-                           >
-                             {comboMessage.text}!
-                           </motion.span>
-                        ) : (
-                           `${comboMessage.text}!`
-                        )}
+                        {comboMessage.text}!
                       </div>
                     </motion.div>
                   )}
@@ -2339,33 +3368,37 @@ export default function App() {
             />
         </div>
 
-        <div className="flex-1 w-full flex items-center justify-center px-4 relative z-10 shrink min-h-0">
+        <div className="flex-1 w-full flex items-center justify-center px-4 relative z-10 shrink min-h-0 pb-20 sm:pb-24">
           <AnimatePresence>
             {comboMessage && comboMessage.count && comboMessage.count >= 2 && (
                <motion.div
                  key="combo-aura"
                  initial={{ opacity: 0 }}
-                 animate={{ opacity: comboMessage.count >= 6 ? 0.8 : (comboMessage.count >= 4 ? 0.6 : 0.3) }}
+                 animate={{ opacity: 1 }}
                  exit={{ opacity: 0 }}
-                 transition={{ duration: 0.5 }}
-                 className="absolute inset-0 pointer-events-none flex items-center justify-center -z-10 overflow-visible"
-                 style={{ willChange: 'opacity, transform' }}
+                 transition={{ duration: 0.4 }}
+                 className="absolute top-0 left-0 right-0 bottom-20 sm:bottom-24 pointer-events-none flex items-center justify-center -z-10 overflow-visible"
                >
                  {comboMessage.count >= 6 && (
                      <motion.div 
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 0.2 }}
-                        className="fixed inset-0 bg-[#6366F1] pointer-events-none"
-                        style={{ maskImage: 'radial-gradient(ellipse at center, transparent 40%, black 100%)', WebkitMaskImage: 'radial-gradient(ellipse at center, transparent 40%, black 100%)' }}
+                        className="fixed inset-0 pointer-events-none"
+                        style={{ background: 'radial-gradient(ellipse at center, transparent 35%, rgba(99,102,241,0.25) 100%)' }}
                      />
                  )}
                  <motion.div
                     animate={
-                        comboMessage.count >= 6 ? { scale: [1, 1.1, 1], opacity: [0.7, 1, 0.7], filter: ['hue-rotate(0deg)', 'hue-rotate(360deg)'] } : 
-                        comboMessage.count >= 4 ? { scale: [1, 1.05, 1], opacity: [0.6, 1, 0.6] } : { scale: 1, opacity: 1 }
+                        comboMessage.count >= 6 ? { scale: [1, 1.06, 1], opacity: [0.85, 1, 0.85] } : 
+                        comboMessage.count >= 4 ? { scale: [1, 1.04, 1], opacity: [0.7, 0.9, 0.7] } : { scale: [1, 1.02, 1], opacity: [0.55, 0.7, 0.55] }
                     }
-                    transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                    className={`bg-[#FBBF24] rounded-full absolute ${comboMessage.count >= 4 ? 'w-[140%] aspect-square blur-3xl translate-y-1/4' : 'w-[90%] aspect-square blur-xl translate-y-0'}`}
+                    transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
+                    className="w-[140%] aspect-square rounded-full absolute"
+                    style={{ 
+                        background: 'radial-gradient(circle, rgba(251, 191, 36, 0.65) 0%, rgba(245, 158, 11, 0.25) 45%, rgba(0, 0, 0, 0) 70%)',
+                        mixBlendMode: 'screen',
+                        willChange: 'transform, opacity'
+                    }}
                  />
                </motion.div>
             )}
@@ -2374,14 +3407,14 @@ export default function App() {
           <motion.div 
             animate={
                 shake ? { x: [-shake.intensity, shake.intensity, -shake.intensity, shake.intensity, -shake.intensity/2, shake.intensity/2, 0] } : 
-                (levelUpTrigger > 0 ? { scale: [1, 1.05, 1], filter: ['brightness(1)', 'brightness(1.5)', 'brightness(1)'] } : { scale: 1, filter: 'brightness(1)' })}
+                (levelUpTrigger > 0 ? { scale: [1, 1.05, 1] } : { scale: 1 })}
             transition={{ duration: shake ? 0.4 : 0.6, ease: "easeInOut" }}
-            className={`relative w-full aspect-square bg-[#1E1E1E] rounded-[2rem] p-3 touch-none overflow-hidden transition-colors duration-700 ${(!isIdle && isAppVisible && movesWithoutMerge >= entropyLimit - 1) ? 'shadow-[0_0_60px_rgba(248,113,113,0.3)] border border-[#F87171]/30' : (!isIdle && isAppVisible && movesWithoutMerge >= entropyLimit - 2) ? 'shadow-[0_0_40px_rgba(248,113,113,0.15)] border border-[#F87171]/10' : 'shadow-2xl border border-white/5'}`}
+            className={`relative w-full aspect-square bg-[#1E1E1E] rounded-[2.5rem] p-3 touch-none overflow-hidden transition-colors duration-700 ${(!isIdle && isAppVisible && movesWithoutMerge >= entropyLimit - 1) ? (lowPerformanceMode ? 'border border-[#F87171]/30' : 'shadow-[0_0_60px_rgba(248,113,113,0.3)] border border-[#F87171]/30') : (!isIdle && isAppVisible && movesWithoutMerge >= entropyLimit - 2) ? (lowPerformanceMode ? 'border border-[#F87171]/10' : 'shadow-[0_0_40px_rgba(248,113,113,0.15)] border border-[#F87171]/10') : (lowPerformanceMode ? 'border border-white/5' : 'shadow-2xl border border-white/5')}`}
             style={{ maxWidth: 'min(100%, 60vh)' }}
           >
-            {(!isIdle && isAppVisible && movesWithoutMerge >= entropyLimit - 2) && (
+            {(!isIdle && isAppVisible && movesWithoutMerge >= entropyLimit - 2) && !lowPerformanceMode && (
                 <div 
-                   className={`absolute inset-0 pointer-events-none rounded-[2rem] z-40 animate-pulse ${movesWithoutMerge >= entropyLimit - 1 ? 'shadow-[inset_0_0_80px_rgba(248,113,113,0.4)]' : 'shadow-[inset_0_0_40px_rgba(248,113,113,0.2)]'}`} 
+                   className={`absolute inset-0 pointer-events-none rounded-[2.5rem] z-40 animate-pulse ${movesWithoutMerge >= entropyLimit - 1 ? 'shadow-[inset_0_0_80px_rgba(248,113,113,0.4)]' : 'shadow-[inset_0_0_40px_rgba(248,113,113,0.2)]'}`} 
                    style={{ animationDuration: movesWithoutMerge >= entropyLimit - 1 ? '1s' : '2s' }}
                 />
             )}
@@ -2402,7 +3435,7 @@ export default function App() {
             </AnimatePresence>
 
             {/* Background Empty Cells */}
-            <GridBackground gridSize={gridSize} tileSizePercent={tileSizePercent} />
+            <GridBackground gridSize={gridSize} tileSizePercent={tileSizePercent} lowPerformanceMode={lowPerformanceMode} />
 
             <div className="absolute inset-3 z-10 block pointer-events-none">
               <AnimatePresence initial={false}>
@@ -2415,6 +3448,7 @@ export default function App() {
                     levelUpTrigger={levelUpTrigger}
                     isHammerActive={isHammerActive}
                     onClick={executeClear}
+                    lowPerformanceMode={lowPerformanceMode}
                   />
                 ))}
                 {ghostTiles.map(tile => (
@@ -2426,13 +3460,14 @@ export default function App() {
                     levelUpTrigger={levelUpTrigger}
                     isHammerActive={isHammerActive}
                     onClick={executeClear}
+                    lowPerformanceMode={lowPerformanceMode}
                   />
                 ))}
               </AnimatePresence>
             </div>
             {/* VFX Layer added with pointer-events-none */}
             <div className="absolute inset-3 z-[60] pointer-events-none">
-                 <VFXLayer ref={vfxRef} tileSizePercent={tileSizePercent} />
+                 <VFXLayer ref={vfxRef} tileSizePercent={tileSizePercent} lowPerformanceMode={lowPerformanceMode} />
             </div>
           </motion.div>
         </div>
