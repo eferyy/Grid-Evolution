@@ -7,11 +7,10 @@ const config: CapacitorConfig = {
   // Disable Capacitor's default splash screen to use our custom in-app loading screen
   plugins: {
     SplashScreen: {
-      launchShowDuration: 0,        // Hide native splash immediately (0ms)
+      launchShowDuration: 0,
       launchAutoHide: true,
-      backgroundColor: '#1E1E1E',   // Match our loading screen bg — no white flash
-      splashFullScreen: true,       // Cover the entire screen during transition
-      splashImmersive: false        // Keep system bars visible (no immersive mode)
+      backgroundColor: '#121212',
+      emptyBackgroundColor: '#121212'
     }
   },
   // Prevent immersive/fullscreen overlay — system bars must stay visible

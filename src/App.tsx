@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, memo, useMemo } from 'react';
-import { RotateCcw, Undo2, Hammer, Shuffle, Share2, Hand, Settings as SettingsIcon, X, Volume2, Vibrate, AlertTriangle, Snowflake, Grid, Zap } from 'lucide-react';
+import { RotateCcw, Undo2, Hammer, Shuffle, Share2, Hand, Settings as SettingsIcon, X, Volume2, Vibrate, AlertTriangle, Snowflake, Grid, Zap, Home } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
@@ -42,6 +42,78 @@ interface GameHistory {
 
 // --- Constants & Helpers ---
 const generateId = () => Math.random().toString(36).substring(2, 9);
+const CHALLENGE_LEVELS = Array.from({ length: 105 }, (_, i) => {
+  const lvl = i + 1;
+  let target = 32;
+  let gridSize = 4;
+  const archetype = lvl % 5;
+  let levelStyle = "STRATEJI";
+
+  // A. Izgara Boyutu Dağılımı (20. bölümden sonra esnek geçiş)
+  if (lvl >= 20) {
+    if (lvl % 6 === 0) gridSize = 5;
+    else if (lvl % 6 === 3) gridSize = 6;
+  }
+
+  // B. Taban Hedef Blok Belirleme (Tiers)
+  let baseTarget = 32;
+  if (lvl > 10) baseTarget = 64;
+  if (lvl > 25) baseTarget = 128;
+  if (lvl > 45) baseTarget = 256;
+  if (lvl > 70) baseTarget = 512;
+  if (lvl > 90) baseTarget = 1024;
+
+  let voidInterval = 7;
+  let voidChance = 0.15;
+  let bufferFactor = 1.8;
+  let tileSpawnModifier = "normal"; // 2 veya 4 doğma kuralı
+
+  // C. 5'li Arketip Çarkı
+  if (archetype === 1) {
+    // 1. Tarz: SPRINT -> Sıfır engel, dar hamle, hızlı birleştirme
+    levelStyle = "SPRINT";
+    target = baseTarget;
+    bufferFactor = 1.3;
+    voidInterval = 999;
+    voidChance = 0;
+  } else if (archetype === 2) {
+    // 2. Tarz: KAOS -> Çok sık engel, cömert hamle, hayatta kalma
+    levelStyle = "KAOS";
+    target = baseTarget;
+    bufferFactor = 2.4;
+    voidInterval = gridSize === 4 ? 4 : 5;
+    voidChance = 0.25;
+  } else if (archetype === 3) {
+    // 3. Tarz: BEREKET -> Sadece 4 ve 8 karoları doğar! Hedef yüksek, hamle azdır
+    levelStyle = "BEREKET";
+    target = baseTarget * 2; // Taşlar büyük doğduğu için hedef iki katı!
+    if (target > 1024) target = 1024;
+    bufferFactor = 1.1; // Büyük taşlar doğduğu için matematiksel hamle ihtiyacı çok düşüktür
+    voidInterval = 8;
+    voidChance = 0.12;
+    tileSpawnModifier = "lucky"; // Agent oyun içinde sadece 4 ve 8 doğuracak
+  } else if (archetype === 4) {
+    // 4. Tarz: KABUS -> Engeller tahtada 2 kat uzun kalır, yüksek hata payı tamponu
+    levelStyle = "KABUS";
+    target = baseTarget;
+    bufferFactor = 2.1;
+    voidInterval = 6;
+    voidChance = 0.22;
+  } else {
+    // 5. Tarz: STRATEJİ -> Dengeli standart taktik mod
+    levelStyle = "STRATEJI";
+    target = baseTarget;
+    bufferFactor = 1.7;
+    voidInterval = 7;
+    voidChance = 0.15;
+  }
+
+  // D. Adil Hamle Hesaplama Kalkanı
+  const minPossibleMoves = target / 2;
+  const moves = Math.floor(minPossibleMoves * bufferFactor) + 15;
+
+  return { level: lvl, target, moves, voidInterval, voidChance, gridSize, levelStyle, tileSpawnModifier };
+});
 
 // CSS clamp() fallback for older WebView engines (Android 7-8, AOSP WebView < Chrome 79)
 // Falls back to the preferred (middle) value which uses vw units for responsiveness
@@ -113,7 +185,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "I reached Level {level} with {score} points in Grid Evolution!\nLargest block: {maxBlock}\nMoves: {moves}",
     language: "Language",
     reduceEffects: "Reduce Effects",
-    loadingText: "LOADING GRID EVOLUTION..."
+    loadingText: "LOADING GRID EVOLUTION...",
+    challengeMode: "CHALLENGE",
+    selectStage: "SELECT STAGE",
+    stageWord: "STAGE",
+    returnToTree: "RETURN TO MAP",
+    backWord: "BACK",
+    systemUpdateRequired: "SYSTEM UPDATE REQUIRED",
+    webviewWarningText: "Grid Evolution's graphics engine requires a newer Android System WebView. Please update to resume playing.",
+    updateWebviewBtn: "UPDATE WEBVIEW",
+    resumeWord: "RESUME"
   },
   tr: {
     score: "Skor",
@@ -173,7 +254,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "Grid Evolution oyununda {score} puanla Seviye {level}'e ulaştım!\nEn büyük blok: {maxBlock}\nHamle sayısı: {moves}",
     language: "Dil",
     reduceEffects: "Efektleri Azalt",
-    loadingText: "GRID EVOLUTION YÜKLENIYOR..."
+    loadingText: "GRID EVOLUTION YÜKLENIYOR...",
+    challengeMode: "MEYDAN OKUMA",
+    selectStage: "AŞAMA SEÇİN",
+    stageWord: "BÖLÜM",
+    returnToTree: "BÖLÜM SEÇİMİNE DÖN",
+    backWord: "GERİ",
+    systemUpdateRequired: "SİSTEM GÜNCELLEMESİ GEREKLİ",
+    webviewWarningText: "Grid Evolution'ın grafik arayüzü ve 120 FPS motoru, cihazınızdaki Android System WebView tarafından desteklenmiyor. Kesintisiz oyun deneyimi için lütfen WebView uygulamasını güncelleyin.",
+    updateWebviewBtn: "WEBVIEW'U GÜNCELLE",
+    resumeWord: "DEVAM"
   },
   es: {
     score: "Puntuación",
@@ -233,7 +323,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "¡Alcancé el nivel {level} con {score} puntos en Grid Evolution!\nBloque más grande: {maxBlock}\nMovimientos: {moves}",
     language: "Idioma",
     reduceEffects: "Reducir Efectos",
-    loadingText: "CARGANDO GRID EVOLUTION..."
+    loadingText: "CARGANDO GRID EVOLUTION...",
+    challengeMode: "DESAFÍO",
+    selectStage: "SELECCIONAR NIVEL",
+    stageWord: "NIVEL",
+    returnToTree: "VOLVER AL MAPA",
+    backWord: "ATRÁS",
+    systemUpdateRequired: "ACTUALIZACIÓN DE SISTEMA REQUERIDA",
+    webviewWarningText: "El motor gráfico de Grid Evolution requiere una versión más reciente de Android System WebView. Por favor, actualícelo para reanudar el juego.",
+    updateWebviewBtn: "ACTUALIZAR WEBVIEW",
+    resumeWord: "REANUDAR"
   },
   fr: {
     score: "Score",
@@ -293,7 +392,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "J'ai atteint le niveau {level} avec {score} points dans Grid Evolution!\nPlus grand bloc: {maxBlock}\nMouvements: {moves}",
     language: "Langue",
     reduceEffects: "Réduire les Effets",
-    loadingText: "CHARGEMENT DE GRID EVOLUTION..."
+    loadingText: "CHARGEMENT DE GRID EVOLUTION...",
+    challengeMode: "DÉFI",
+    selectStage: "SÉLECTIONNER NIVEAU",
+    stageWord: "NIVEAU",
+    returnToTree: "RETOUR A LA CARTE",
+    backWord: "RETOUR",
+    systemUpdateRequired: "MISE À JOUR SYSTÈME REQUISE",
+    webviewWarningText: "Le moteur graphique de Grid Evolution nécessite une version plus récente d'Android System WebView. Veuillez le mettre à jour pour continuer à jouer.",
+    updateWebviewBtn: "METTRE À JOUR WEBVIEW",
+    resumeWord: "REPRENDRE"
   },
   ru: {
     score: "Счет",
@@ -353,7 +461,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "Я достиг уровня {level} с {score} очками в Grid Evolution!\nЛучший блок: {maxBlock}\nХодов: {moves}",
     language: "Язык",
     reduceEffects: "Уменьшить эффекты",
-    loadingText: "ЗАГРУЗКА GRID EVOLUTION..."
+    loadingText: "ЗАГРУЗКА GRID EVOLUTION...",
+    challengeMode: "ИСПЫТАНИЕ",
+    selectStage: "ВЫБЕРИТЕ ЭТАП",
+    stageWord: "ЭТАП",
+    returnToTree: "ВЕРНУТЬСЯ НА КАРТУ",
+    backWord: "НАЗАД",
+    systemUpdateRequired: "ТРЕБУЕТСЯ ОБНОВЛЕНИЕ СИСТЕМЫ",
+    webviewWarningText: "Графическому движку Grid Evolution требуется более новая версия Android System WebView. Пожалуйста, обновите ее для возобновления игры.",
+    updateWebviewBtn: "ОБНОВИТЬ WEBVIEW",
+    resumeWord: "ПРОДОЛЖИТЬ"
   },
   ar: {
     score: "النتيجة",
@@ -413,7 +530,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "لقد وصلت إلى المستوى {level} بـ {score} نقطة في Grid Evolution!\nأكبر كتلة: {maxBlock}\nالحركات: {moves}",
     language: "اللغة",
     reduceEffects: "تقليل المؤثرات",
-    loadingText: "جاري التحميل..."
+    loadingText: "جاري التحميل...",
+    challengeMode: "التحدي",
+    selectStage: "اختر المرحلة",
+    stageWord: "المرحلة",
+    returnToTree: "العودة إلى الخريطة",
+    backWord: "رجوع",
+    systemUpdateRequired: "مطلوب تحديث النظام",
+    webviewWarningText: "يتطلب محرك رسوميات Grid Evolution إصداراً أحدث من Android System WebView. يرجى التحديث لمتابعة اللعب.",
+    updateWebviewBtn: "تحديث WEBVIEW",
+    resumeWord: "استئناف"
   },
   de: {
     score: "Ergebnis",
@@ -473,7 +599,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "Ich habe Level {level} mit {score} Punkten in Grid Evolution erreicht!\nGrößter Block: {maxBlock}\nZüge: {moves}",
     language: "Sprache",
     reduceEffects: "Effekte Reduzieren",
-    loadingText: "GRID EVOLUTION WIRD GELADEN..."
+    loadingText: "GRID EVOLUTION WIRD GELADEN...",
+    challengeMode: "HERAUSFORDERUNG",
+    selectStage: "STUFE WÄHLEN",
+    stageWord: "STUFE",
+    returnToTree: "ZURÜCK ZUR KARTE",
+    backWord: "ZURÜCK",
+    systemUpdateRequired: "SYSTEMAKTUALISIERUNG ERFORDERLICH",
+    webviewWarningText: "Die Grafik-Engine von Grid Evolution erfordert ein neueres Android System WebView. Bitte aktualisieren Sie es, um weiterzuspielen.",
+    updateWebviewBtn: "WEBVIEW AKTUALISIEREN",
+    resumeWord: "FORTSETZEN"
   },
   pt: {
     score: "Pontos",
@@ -533,7 +668,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "Alcancei o nível {level} com {score} pontos no Grid Evolution!\nMaior bloco: {maxBlock}\nMovimentos: {moves}",
     language: "Idioma",
     reduceEffects: "Reduzir Efeitos",
-    loadingText: "CARREGANDO GRID EVOLUTION..."
+    loadingText: "CARREGANDO GRID EVOLUTION...",
+    challengeMode: "DESAFIO",
+    selectStage: "SELECIONAR FASE",
+    stageWord: "FASE",
+    returnToTree: "VOLTAR AO MAPA",
+    backWord: "VOLTAR",
+    systemUpdateRequired: "ATUALIZAÇÃO DE SISTEMA NECESSÁRIA",
+    webviewWarningText: "O motor gráfico do Grid Evolution requer um Android System WebView mais recente. Atualize-o para continuar jogando.",
+    updateWebviewBtn: "ATUALIZAR WEBVIEW",
+    resumeWord: "RETOMAR"
   },
   ja: {
     score: "スコア",
@@ -593,7 +737,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "Grid Evolutionでレベル {level} に到達、スコア {score} を達成しました！\n最大ブロック: {maxBlock}\n移動数: {moves}",
     language: "言語",
     reduceEffects: "エフェクト軽減",
-    loadingText: "GRID EVOLUTION 読み込み中..."
+    loadingText: "GRID EVOLUTION 読み込み中...",
+    challengeMode: "チャレンジ",
+    selectStage: "ステージ選択",
+    stageWord: "ステージ",
+    returnToTree: "マップに戻る",
+    backWord: "戻る",
+    systemUpdateRequired: "システムアップデートが必要です",
+    webviewWarningText: "Grid Evolutionのグラフィックエンジンには、より新しいAndroid System WebViewが必要です。プレイを再開するにはアップデートしてください。",
+    updateWebviewBtn: "WEBVIEWをアップデート",
+    resumeWord: "再開"
   },
   zh: {
     score: "得分",
@@ -653,7 +806,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "我在 Grid Evolution 中达到了等级 {level} 并获得了 {score} 分！\n最大方块: {maxBlock}\n移动步数: {moves}",
     language: "语言",
     reduceEffects: "减少效果",
-    loadingText: "正在加载 GRID EVOLUTION..."
+    loadingText: "正在加载 GRID EVOLUTION...",
+    challengeMode: "挑战",
+    selectStage: "选择关卡",
+    stageWord: "关卡",
+    returnToTree: "返回地图",
+    backWord: "返回",
+    systemUpdateRequired: "需要系统更新",
+    webviewWarningText: "Grid Evolution的图形引擎需要较新版本的 Android System WebView。请更新以继续游戏。",
+    updateWebviewBtn: "更新 WEBVIEW",
+    resumeWord: "继续"
   },
   pl: {
     score: "Wynik",
@@ -713,7 +875,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "Osiągnąłem poziom {level} z wynikiem {score} w Grid Evolution!\nNajwiększy blok: {maxBlock}\nRuchy: {moves}",
     language: "Język",
     reduceEffects: "Ogranicz Efekty",
-    loadingText: "ŁADOWANIE GRID EVOLUTION..."
+    loadingText: "ŁADOWANIE GRID EVOLUTION...",
+    challengeMode: "WYZWANIE",
+    selectStage: "WYBIERZ ETAP",
+    stageWord: "ETAP",
+    returnToTree: "POWRÓT DO MAPY",
+    backWord: "WSTECZ",
+    systemUpdateRequired: "WYMAGANA AKTUALIZACJA SYSTEMU",
+    webviewWarningText: "Silnik graficzny Grid Evolution wymaga nowszej wersji Android System WebView. Zaktualizuj go, aby wznowić grę.",
+    updateWebviewBtn: "ZAKTUALIZUJ WEBVIEW",
+    resumeWord: "WZNÓW"
   },
   it: {
     score: "Punteggio",
@@ -773,7 +944,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "Ho raggiunto il Livello {level} con {score} punti in Grid Evolution!\nBlocco più grande: {maxBlock}\nMosse: {moves}",
     language: "Lingua",
     reduceEffects: "Riduci Effetti",
-    loadingText: "CARICAMENTO GRID EVOLUTION..."
+    loadingText: "CARICAMENTO GRID EVOLUTION...",
+    challengeMode: "SFIDA",
+    selectStage: "SELEZIONA LIVELLO",
+    stageWord: "LIVELLO",
+    returnToTree: "TORNA ALLA MAPPA",
+    backWord: "INDIETRO",
+    systemUpdateRequired: "AGGIORNAMENTO DI SISTEMA RICHIESTO",
+    webviewWarningText: "Il motore grafico di Grid Evolution richiede un Android System WebView più recente. Si prega di aggiornarlo per riprendere a giocare.",
+    updateWebviewBtn: "AGGIORNA WEBVIEW",
+    resumeWord: "RIPRENDI"
   },
   ko: {
     score: "점수",
@@ -833,7 +1013,16 @@ const TRANSLATIONS: Record<string, any> = {
     shareMessage: "Grid Evolution에서 {score}점으로 레벨 {level}에 도달했습니다!\n가장 큰 블록: {maxBlock}\n이동 수: {moves}",
     language: "언어",
     reduceEffects: "효과 줄이기",
-    loadingText: "GRID EVOLUTION 로딩 중..."
+    loadingText: "GRID EVOLUTION 로딩 중...",
+    challengeMode: "챌린지",
+    selectStage: "스테이지 선택",
+    stageWord: "스테이지",
+    returnToTree: "지도로 돌아가기",
+    backWord: "뒤로",
+    systemUpdateRequired: "시스템 업데이트 필요",
+    webviewWarningText: "Grid Evolution의 그래픽 엔진에는 최신 Android System WebView가 필요합니다. 플레이를 재개하려면 업데이트해 주세요.",
+    updateWebviewBtn: "WEBVIEW 업데이트",
+    resumeWord: "재개"
   }
 };
 
@@ -881,6 +1070,17 @@ const getTileStyle = (val: number) => TILE_STYLES[val] || { bg: '#EEEEEE', text:
 
 // --- Memoized Sub-Components ---
 
+const SHADOW_PRESETS = {
+  ghost: 'none',
+  lowPerf: 'none',
+  targetable: '0 0 15px #6366F1, inset 0 0 10px rgba(99, 102, 241, 0.5)',
+  levelUp: '0 0 30px 10px #6366F1, inset 0 0 15px #6366F1',
+  voidCenter: 'inset 0 0 20px rgba(156, 163, 175, 0.4), 0 0 25px 8px rgba(156, 163, 175, 0.5)',
+  voidEdge: 'inset 0 0 20px rgba(156, 163, 175, 0.4), 0 0 15px rgba(156, 163, 175, 0.6)',
+  tier2: 'inset 0 0 10px rgba(255,255,255,0.5), 0 0 0 1px #6366F1, 0 8px 16px rgba(0,0,0,0.5)',
+  base: 'inset 0 0 8px rgba(255,255,255,0.1), 0 8px 16px rgba(0,0,0,0.3)'
+};
+
 const TileComponent = memo(({ 
   tile, 
   gridSize, 
@@ -888,7 +1088,8 @@ const TileComponent = memo(({
   levelUpTrigger,
   isHammerActive,
   onClick,
-  lowPerformanceMode
+  lowPerformanceMode,
+  gameOver
 }: { 
   tile: TileConfig, 
   gridSize: number, 
@@ -896,7 +1097,8 @@ const TileComponent = memo(({
   levelUpTrigger: number,
   isHammerActive?: boolean,
   onClick?: (id: string) => void,
-  lowPerformanceMode?: boolean
+  lowPerformanceMode?: boolean,
+  gameOver?: boolean
 }) => {
   const style = useMemo(() => getTileStyle(tile.value), [tile.value]);
   const isCenterVoid = tile.isVoid && tile.row > 0 && tile.row < gridSize - 1 && tile.col > 0 && tile.col < gridSize - 1;
@@ -914,19 +1116,30 @@ const TileComponent = memo(({
   }, [tile.value, tile.isVoid]);
 
   const boxShadow = useMemo(() => {
-    if (tile.isGhost) return 'none';
-    if (lowPerformanceMode) return 'none';
-    if (isTargetable) return `0 0 15px #6366F1, inset 0 0 10px rgba(99, 102, 241, 0.5)`;
-    if (levelUpTrigger > 0) return `0 0 30px 10px #6366F1, inset 0 0 15px #6366F1`;
-    if (tile.isVoid) return isCenterVoid ? 'inset 0 0 20px rgba(156, 163, 175, 0.4), 0 0 25px 8px rgba(156, 163, 175, 0.5)' : 'inset 0 0 20px rgba(156, 163, 175, 0.4), 0 0 15px rgba(156, 163, 175, 0.6)';
+    if (tile.isGhost) return SHADOW_PRESETS.ghost;
+    if (lowPerformanceMode) return SHADOW_PRESETS.lowPerf;
+    if (isTargetable) return SHADOW_PRESETS.targetable;
+    if (levelUpTrigger > 0) return SHADOW_PRESETS.levelUp;
+    if (tile.isVoid) return isCenterVoid ? SHADOW_PRESETS.voidCenter : SHADOW_PRESETS.voidEdge;
     if (isTier4) return `inset 0 0 20px rgba(255,255,255,0.8), 0 0 40px ${style.bg}`;
     if (isTier3) return `inset 0 0 15px rgba(255,255,255,0.4), 0 0 20px ${style.bg}80`;
-    if (isTier2) return `inset 0 0 10px rgba(255,255,255,0.5), 0 0 0 1px #6366F1, 0 8px 16px rgba(0,0,0,0.5)`;
-    return `inset 0 0 8px rgba(255,255,255,0.1), 0 8px 16px rgba(0,0,0,0.3)`;
-  }, [tile.value, tile.isVoid, tile.isGhost, isTargetable, levelUpTrigger, isCenterVoid, isTier2, isTier3, isTier4, style.bg, lowPerformanceMode]);
+    if (isTier2) return SHADOW_PRESETS.tier2;
+    return SHADOW_PRESETS.base;
+  }, [tile.isGhost, lowPerformanceMode, isTargetable, levelUpTrigger, tile.isVoid, isCenterVoid, isTier4, isTier3, isTier2, style.bg]);
   const activeShadow = tile.hasMoved ? 'none' : boxShadow;
 
   const backgroundStyles = useMemo(() => {
+    if (lowPerformanceMode) {
+      return {
+        backgroundColor: '#050505',
+        color: tile.isVoid ? '#A855F7' : style.text,
+        border: '2px solid rgba(168, 85, 247, 0.8)',
+        boxShadow: 'none',
+        mixBlendMode: 'normal' as const,
+        backgroundImage: 'none'
+      };
+    }
+    
     const base: React.CSSProperties = {
         backgroundColor: tile.isVoid ? 'transparent' : style.bg,
         color: tile.isVoid ? '#E5E7EB' : style.text,
@@ -938,10 +1151,10 @@ const TileComponent = memo(({
         base.backgroundSize = '200% 200%';
     }
     return base;
-  }, [tile.value, tile.isVoid, tile.isGhost, isTier3, style.bg, style.text]);
+  }, [tile.value, tile.isVoid, tile.isGhost, isTier3, style.bg, style.text, lowPerformanceMode]);
 
-  const calculatedX = `calc(((100% + 12px) / ${gridSize}) * ${tile.col})`;
-  const calculatedY = `calc(((100% + 12px) / ${gridSize}) * ${tile.row})`;
+  const calculatedX = useMemo(() => `calc(((100% + 12px) / ${gridSize}) * ${tile.col})`, [gridSize, tile.col]);
+  const calculatedY = useMemo(() => `calc(((100% + 12px) / ${gridSize}) * ${tile.row})`, [gridSize, tile.row]);
   const finalZIndex = useMemo(() => {
     const base = tile.row * 10 + tile.col;
     return base + (tile.isGhost ? 400 : (tile.isMerged ? 500 : (tile.isVoid ? 300 : (tile.isDying ? 0 : 100))));
@@ -955,7 +1168,6 @@ const TileComponent = memo(({
           top: calculatedY,
           scale: (tile.isVoid && !lowPerformanceMode) ? [1, 1.05, 1] : 1,
           opacity: tile.isGhost ? 0.55 : 1,
-          backgroundPosition: (isTier3 && !tile.isGhost && tile.isMerged && !lowPerformanceMode) ? ['0% 0%', '200% 200%'] : '0% 0%',
           z: 0
       }}
       exit={tile.isGhost ? { opacity: 0, transition: { duration: 0.1 } } : { opacity: 0 }}
@@ -963,19 +1175,16 @@ const TileComponent = memo(({
           left: { type: "tween", duration: 0.05 },
           top: { type: "tween", duration: 0.05 },
           scale: { duration: 0 },
-          backgroundPosition: { duration: 0 },
           opacity: { duration: 0 }
       } : {
           left: { type: "tween", ease: [0.4, 0, 0.2, 1], duration: 0.15 },
           top: { type: "tween", ease: [0.4, 0, 0.2, 1], duration: 0.15 },
           scale: tile.isVoid ? { duration: 1.5, repeat: Infinity, ease: "easeInOut" } : (tile.isNew ? { type: "spring", stiffness: 400, damping: 22, mass: 0.8 } : (tile.isMerged ? { type: "spring", stiffness: 350, damping: 20, mass: 0.8 } : { type: "tween", ease: [0.4, 0, 0.2, 1], duration: 0.15 })),
-          backgroundPosition: (isTier3 && tile.isMerged) ? { duration: 1.5, ease: "linear" } : { duration: 0 },
           opacity: { duration: 0.1 }
       }}
       onClick={() => { if (isTargetable && onClick) onClick(tile.id); }}
       className={`absolute flex items-center justify-center rounded-xl sm:rounded-[1.5rem] ${fontWeightClass} transform-gpu overflow-hidden ${tile.value >= 64 ? 'z-[25]' : ''} ${isTargetable ? 'cursor-pointer hover:scale-[1.02] ring-2 ring-[#6366F1] pointer-events-auto' : ''} ${tile.isGhost ? 'border-2 border-dashed border-white/50 pointer-events-none z-[45]' : ''}`}
       style={{
-          willChange: 'transform, opacity',
           width: tileSizePercent,
           height: tileSizePercent,
           boxShadow: activeShadow,
@@ -1016,7 +1225,7 @@ const TileComponent = memo(({
       {tile.isVoid ? (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <svg 
-                  className="w-4/5 h-4/5 text-white animate-spin absolute" 
+                  className={`w-4/5 h-4/5 text-white absolute ${(lowPerformanceMode || levelUpTrigger > 0 || gameOver) ? '' : 'animate-spin'}`} 
                   viewBox="0 0 100 100" 
                   style={{ animationDuration: '24s', opacity: 0.08, willChange: 'transform' }}
               >
@@ -1068,41 +1277,70 @@ const TileComponent = memo(({
            prev.levelUpTrigger === next.levelUpTrigger &&
            prev.isHammerActive === next.isHammerActive &&
            prev.onClick === next.onClick &&
-           prev.lowPerformanceMode === next.lowPerformanceMode;
+           prev.lowPerformanceMode === next.lowPerformanceMode &&
+           prev.gameOver === next.gameOver;
 });
 
-const Header = memo(({ score, highScore, scoreMultiplier, onOpenSettings, t }: { score: number, highScore: number, scoreMultiplier: number, onOpenSettings: () => void, t: any }) => (
+const Header = memo(({ score, highScore, scoreMultiplier, onOpenSettings, t, gameMode, movesLeft, maxBlock, gameOver, challengeLevel, currentTarget }: { score: number, highScore: number, scoreMultiplier: number, onOpenSettings: () => void, t: any, gameMode: string | null, movesLeft: number, maxBlock: number, gameOver: boolean, challengeLevel?: number, currentTarget?: number }) => (
 <div className="flex justify-between items-start w-full mb-6 relative shrink-0">
     <div className="flex flex-col flex-1 min-w-0 pr-1">
       <h1 className="text-base sm:text-2xl font-light tracking-[0.2em] sm:tracking-[0.3em] opacity-90 pl-1 mt-1 leading-tight whitespace-nowrap">GRID<br/>EVOLUTION</h1>
+      {gameMode === 'moveLimit' && challengeLevel && (
+         <div className="flex items-center gap-1.5 ml-1 mt-1 flex-wrap">
+            <span className="text-[10px] font-bold tracking-widest text-pink-400 uppercase">{t.stageWord} {challengeLevel}</span>
+         </div>
+      )}
     </div>
     <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-      <div className="flex gap-1.5 sm:gap-2">
-        <div 
-          className="bg-white/[0.06] rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border border-white/[0.08] min-w-[56px] sm:min-w-[70px]"
-          style={{ boxShadow: '0 4px 20px -2px rgba(0,0,0,0.3)' }}
-        >
-          <span className="text-[8px] sm:text-[9px] uppercase tracking-[0.15em] opacity-40 mb-0.5">{t.score}</span>
-          <div className="flex items-center gap-1">
-              <span className="text-sm sm:text-lg font-extralight leading-none">{score}</span>
-              {scoreMultiplier > 1 && (
-                  <span 
-                      className="text-[0.6rem] leading-none bg-purple-500/10 text-purple-200 border border-purple-500/20 px-1 py-0.5 rounded-[4px] font-medium tracking-wider relative -top-[1px]"
-                      style={{ textShadow: '0 0 8px rgba(168, 85, 247, 0.4), 0 0 12px rgba(6, 182, 212, 0.3)' }}
-                  >
-                      {scoreMultiplier}x
-                  </span>
-              )}
-          </div>
-        </div>
-        <div 
-          className="bg-white/[0.06] rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border border-white/[0.08] min-w-[56px] sm:min-w-[70px]"
-          style={{ boxShadow: '0 4px 20px -2px rgba(0,0,0,0.3)' }}
-        >
-          <span className="text-[8px] sm:text-[9px] uppercase tracking-[0.15em] opacity-40 mb-0.5">{t.best}</span>
-          <span className="text-sm sm:text-lg font-extralight leading-none">{highScore}</span>
-        </div>
-      </div>
+      {gameMode === 'moveLimit' ? (
+         <div className="flex gap-1.5 sm:gap-2">
+            <motion.div 
+               animate={(maxBlock >= (currentTarget || 256) / 2 && !gameOver) ? { boxShadow: ["0 0 10px rgba(45,212,191,0.2)", "0 0 20px rgba(45,212,191,0.6)", "0 0 10px rgba(45,212,191,0.2)"] } : {}}
+               transition={{ duration: 1.5, repeat: Infinity }}
+               className={`bg-white/[0.06] rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border ${maxBlock >= (currentTarget || 256) / 2 ? 'border-teal-400/50 text-teal-300' : 'border-white/[0.08]'} min-w-[56px] sm:min-w-[70px]`}
+               style={{ boxShadow: '0 4px 20px -2px rgba(0,0,0,0.3)' }}
+            >
+               <span className={`text-[8px] sm:text-[9px] uppercase tracking-[0.15em] mb-0.5 ${maxBlock >= (currentTarget || 256) / 2 ? 'opacity-80' : 'opacity-40'}`}>🎯 {t.targetGoal}</span>
+               <span className="text-sm sm:text-lg font-extralight leading-none">{currentTarget || 256}</span>
+            </motion.div>
+            <motion.div 
+               animate={(movesLeft <= 20 && !gameOver) ? { scale: [1, 1.05, 1], boxShadow: ["0 0 10px rgba(236,72,153,0.2)", "0 0 20px rgba(236,72,153,0.6)", "0 0 10px rgba(236,72,153,0.2)"] } : {}}
+               transition={{ duration: 1, repeat: Infinity }}
+               className={`bg-white/[0.06] rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border ${movesLeft <= 20 ? 'border-pink-500/50 text-pink-400' : 'border-white/[0.08]'} min-w-[56px] sm:min-w-[70px]`}
+               style={{ boxShadow: '0 4px 20px -2px rgba(0,0,0,0.3)' }}
+            >
+               <span className={`text-[8px] sm:text-[9px] uppercase tracking-[0.15em] mb-0.5 ${movesLeft <= 20 ? 'opacity-80' : 'opacity-40'}`}>⏳ {t.movesRemaining || t.movesLeft}</span>
+               <span className="text-sm sm:text-lg font-extralight leading-none">{movesLeft}</span>
+            </motion.div>
+         </div>
+      ) : (
+         <div className="flex gap-1.5 sm:gap-2">
+            <div 
+              className="bg-white/[0.06] rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border border-white/[0.08] min-w-[56px] sm:min-w-[70px]"
+              style={{ boxShadow: '0 4px 20px -2px rgba(0,0,0,0.3)' }}
+            >
+              <span className="text-[8px] sm:text-[9px] uppercase tracking-[0.15em] opacity-40 mb-0.5">{t.score}</span>
+              <div className="flex items-center gap-1">
+                  <span className="text-sm sm:text-lg font-extralight leading-none">{score}</span>
+                  {scoreMultiplier > 1 && (
+                      <span 
+                          className="text-[0.6rem] leading-none bg-purple-500/10 text-purple-200 border border-purple-500/20 px-1 py-0.5 rounded-[4px] font-medium tracking-wider relative -top-[1px]"
+                          style={{ textShadow: '0 0 8px rgba(168, 85, 247, 0.4), 0 0 12px rgba(6, 182, 212, 0.3)' }}
+                      >
+                          {scoreMultiplier}x
+                      </span>
+                  )}
+              </div>
+            </div>
+            <div 
+              className="bg-white/[0.06] rounded-xl py-1.5 px-1.5 sm:py-2 sm:px-3 flex flex-col items-center border border-white/[0.08] min-w-[56px] sm:min-w-[70px]"
+              style={{ boxShadow: '0 4px 20px -2px rgba(0,0,0,0.3)' }}
+            >
+              <span className="text-[8px] sm:text-[9px] uppercase tracking-[0.15em] opacity-40 mb-0.5">{t.best}</span>
+              <span className="text-sm sm:text-lg font-extralight leading-none">{highScore}</span>
+            </div>
+         </div>
+      )}
       <motion.button
         whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
         onClick={onOpenSettings}
@@ -1215,7 +1453,10 @@ const VFXLayer = memo(React.forwardRef<VFXRef, { tileSizePercent: string, lowPer
   React.useImperativeHandle(ref, () => ({
     addEffects: (newEffects: VFXParams[]) => {
       if (lowPerformanceMode) return; // Ultra-light: suppress all VFX particles
-      setEffects(prev => [...prev, ...newEffects]);
+      setEffects(prev => {
+         const combined = [...prev, ...newEffects];
+         return combined.length > 5 ? combined.slice(-5) : combined;
+      });
     },
     clearEffects: () => {
       setEffects([]);
@@ -1285,17 +1526,17 @@ const VFXParticle = ({ fx, tileSizePercent, onComplete }: { fx: VFXParams, tileS
             </motion.div>
         ) : isMegaWave ? (
             <motion.div
-               initial={{ scale: 0.8, opacity: 0.8, borderWidth: '8px' }}
-               animate={{ scale: 3.5, opacity: 0, borderWidth: '0px' }}
+               initial={{ scale: 0.8, opacity: 0.8 }}
+               animate={{ scale: 3.5, opacity: 0 }}
                transition={{ duration: 0.8, ease: 'easeOut' }}
                onAnimationComplete={onComplete}
-               className="absolute inset-0 rounded-xl sm:rounded-[1.5rem] border-[#6366F1] shadow-[0_0_30px_#6366F1_inset,0_0_30px_#6366F1]"
+               className="absolute inset-0 rounded-xl sm:rounded-[1.5rem] border-2 border-[#6366F1] shadow-[0_0_10px_#6366F1]"
                style={{ zIndex: 100 }}
             />
         ) : isMergeSpark ? (
             <div className="absolute inset-0 flex items-center justify-center">
-                {Array.from({ length: 6 }).map((_, i) => {
-                    const angle = (i / 6) * Math.PI * 2 + (Math.random() * 0.2);
+                {Array.from({ length: 4 }).map((_, i) => {
+                    const angle = (i / 4) * Math.PI * 2 + (Math.random() * 0.2);
                     const dist = 25 + Math.random() * 15;
                     return (
                         <motion.div
@@ -1304,11 +1545,11 @@ const VFXParticle = ({ fx, tileSizePercent, onComplete }: { fx: VFXParams, tileS
                             animate={{ x: Math.cos(angle) * dist, y: Math.sin(angle) * dist, scale: [0, 1.5, 0], opacity: [1, 1, 0] }}
                             transition={{ duration: 0.1, ease: 'easeOut' }}
                             onAnimationComplete={i === 0 ? onComplete : undefined}
-                            className="absolute bg-white"
+                            className="absolute bg-white will-change-transform transform-gpu"
                             style={{
                                 width: `${6 + Math.random() * 6}px`,
                                 height: '1px',
-                                boxShadow: '0 0 6px #6366F1, 0 0 2px #FFFFFF',
+                                boxShadow: '0 0 4px #6366F1',
                                 transformOrigin: 'center'
                             }}
                         />
@@ -1322,7 +1563,6 @@ const VFXParticle = ({ fx, tileSizePercent, onComplete }: { fx: VFXParams, tileS
                 animate={{ scale: isVoidPop ? 1.6 : 1.3, opacity: 0, borderWidth: '1px' }}
                 transition={{ duration: 0.3, ease: 'easeOut' }}
                 onAnimationComplete={onComplete}
-                className={`absolute inset-0 rounded-xl sm:rounded-[1.5rem] border shadow-[0_0_12px_currentColor] ${isVoidPop ? 'border-[#9CA3AF] text-[#9CA3AF]' : 'border-white text-white'}`}
                 />
                 
                 {isVoidPop && Array.from({ length: 5 }).map((_, i) => {
@@ -1346,9 +1586,62 @@ const VFXParticle = ({ fx, tileSizePercent, onComplete }: { fx: VFXParams, tileS
   );
 };
 
+// --- INJECT NEW TRANSLATIONS ---
+const newTranslations: Record<string, any> = {
+  en: { selectMode: "Select Mode", classicMode: "Classic Evolution", movesLeft: "Moves Left", outOfMoves: "Out of Moves!", backToMenu: "Main Menu", targetGoal: "Target", challengeWin: "CHALLENGE COMPLETE!", movesRemaining: "Moves Remaining", nextStage: "NEXT STAGE", rateTitle: "ENJOYING THE GRID?", rateDesc: "Help us evolve! Rate us on the Play Store to support new updates.", rateBtn: "RATE NOW", rateLater: "MAYBE LATER" },
+  tr: { selectMode: "OYUN MODU", classicMode: "Klasik Evrim", movesLeft: "Kalan Hamle", outOfMoves: "Hamleler Tükendi!", backToMenu: "Ana Menü", targetGoal: "Hedef", challengeWin: "GÖREV BAŞARILI!", movesRemaining: "Hamle Kaldı", nextStage: "SONRAKİ BÖLÜM", rateTitle: "IZGARAYI BEĞENDİN Mİ?", rateDesc: "Evrimleşmemize yardımcı ol! Yeni güncellemeleri desteklemek için bizi Play Store'da puanla.", rateBtn: "PUAN VER", rateLater: "BELKİ DAHA SONRA" },
+  de: { selectMode: "Modus Wählen", classicMode: "Klassische Evolution", movesLeft: "Züge Übrig", outOfMoves: "Keine Züge Mehr!", backToMenu: "Hauptmenü", targetGoal: "Ziel", challengeWin: "HERAUSFORDERUNG ABGESCHLOSSEN!", movesRemaining: "Verbleibende Züge", nextStage: "NÄCHSTE STUFE", rateTitle: "GEFÄLLT DIR DAS FELD?", rateDesc: "Hilf uns zu wachsen! Bewerte uns im Play Store.", rateBtn: "BEWERTEN", rateLater: "SPÄTER" },
+  pl: { selectMode: "Wybierz Tryb", classicMode: "Klasyczna Ewolucja", movesLeft: "Ruchy", outOfMoves: "Koniec Ruchów!", backToMenu: "Menu Główne", targetGoal: "Cel", challengeWin: "WYZWANIE UKOŃCZONE!", movesRemaining: "Pozostałe Ruchy", nextStage: "NASTĘPNY ETAP", rateTitle: "ENJOYING THE GRID?", rateDesc: "Help us evolve! Rate us on the Play Store to support new updates.", rateBtn: "RATE NOW", rateLater: "MAYBE LATER" },
+  es: { selectMode: "Seleccionar Modo", classicMode: "Evolución Clásica", movesLeft: "Movimientos", outOfMoves: "¡Sin Movimientos!", backToMenu: "Menú Principal", targetGoal: "Objetivo", challengeWin: "¡DESAFÍO COMPLETADO!", movesRemaining: "Movimientos Restantes", nextStage: "SIGUIENTE NIVEL", rateTitle: "¿TE GUSTA EL TABLERO?", rateDesc: "¡Ayúdanos a evolucionar! Califícanos en la Play Store.", rateBtn: "CALIFICAR", rateLater: "MÁS TARDE" },
+  fr: { selectMode: "Choisir Mode", classicMode: "Évolution Classique", movesLeft: "Coups Restants", outOfMoves: "Plus de Coups!", backToMenu: "Menu Principal", targetGoal: "Objectif", challengeWin: "DÉFI REUSSI!", movesRemaining: "Mouvements Restants", nextStage: "PROCHAIN NIVEAU", rateTitle: "AIMEZ-VOUS LA GRILLE?", rateDesc: "Aidez-nous à évoluer! Notez-nous sur le Play Store.", rateBtn: "NOTER", rateLater: "PLUS TARD" },
+  ru: { selectMode: "Выбор Режима", classicMode: "Классика", movesLeft: "Осталось Ходов", outOfMoves: "Ходы Закончились!", backToMenu: "Главное Меню", targetGoal: "Цель", challengeWin: "ИСПЫТАНИЕ ЗАВЕРШЕНО!", movesRemaining: "Осталось Ходов", nextStage: "СЛЕДУЮЩИЙ ЭТАП", rateTitle: "НРАВИТСЯ СЕТКА?", rateDesc: "Помогите нам развиваться! Оцените нас в Play Store.", rateBtn: "ОЦЕНИТЬ", rateLater: "ПОЗЖЕ" },
+  it: { selectMode: "Seleziona Modo", classicMode: "Evoluzione Classica", movesLeft: "Mosse Rimaste", outOfMoves: "Mosse Esaurite!", backToMenu: "Menu Principale", targetGoal: "Obiettivo", challengeWin: "SFIDA COMPLETATA!", movesRemaining: "Mosse Rimaste", nextStage: "PROSSIMO LIVELLO", rateTitle: "TI PIACE LA GRIGLIA?", rateDesc: "Aiutaci a evolverci! Valutaci su Play Store.", rateBtn: "VALUTA", rateLater: "PIÙ TARDI" },
+  ko: { selectMode: "모드 선택", classicMode: "클래식 에볼루션", movesLeft: "남은 이동", outOfMoves: "이동 횟수 마감!", backToMenu: "메인 메뉴", targetGoal: "목표", challengeWin: "챌린지 완료!", movesRemaining: "남은 이동 횟수", nextStage: "다음 스테이지", rateTitle: "그리드가 마음에 드시나요?", rateDesc: "우리가 진화할 수 있도록 도와주세요! 플레이 스토어에서 별점을 남겨주세요.", rateBtn: "지금 평가하기", rateLater: "나중에 하기" },
+  ja: { selectMode: "モード選択", classicMode: "クラシック進化", movesLeft: "残り移動", outOfMoves: "移動回数終了！", backToMenu: "メインメニュー", targetGoal: "目標", challengeWin: "チャレンジクリア！", movesRemaining: "残り移動数", nextStage: "次のステージ", rateTitle: "グリッドは楽しいですか？", rateDesc: "進化にご協力ください！Playストアで評価をお願いします。", rateBtn: "評価する", rateLater: "後で" },
+  zh: { selectMode: "选择模式", classicMode: "经典进化", movesLeft: "剩余步数", outOfMoves: "步数已用尽！", backToMenu: "主菜单", targetGoal: "目标", challengeWin: "挑战完成！", movesRemaining: "剩余步数", nextStage: "下一关", rateTitle: "喜欢这个网格吗？", rateDesc: "赞助我们的进化！请在应用商店为我们评分。", rateBtn: "现在评分", rateLater: "稍后再说" },
+  ar: { selectMode: "اختر الوضع", classicMode: "التطور الكلاسيكي", movesLeft: "الحركات المتبقية", outOfMoves: "انتهت الحركات!", backToMenu: "القائمة الرئيسية", targetGoal: "الهدف", challengeWin: "تم اكتمال التحدي!", movesRemaining: "الحركات المتبقية", nextStage: "المرحلة التالية", rateTitle: "هل أعجبتك الشبكة؟", rateDesc: "ساعدنا على التطور! قيمنا على متجر Play لدعم التحديثات الجديدة.", rateBtn: "قيم الآن", rateLater: "ربما لاحقاً" }
+};
+Object.keys(TRANSLATIONS).forEach(lang => {
+  if (newTranslations[lang]) {
+    Object.assign(TRANSLATIONS[lang], newTranslations[lang]);
+  } else {
+    Object.assign(TRANSLATIONS[lang], newTranslations['en']);
+  }
+});
+
 // --- Main App Component ---
+type GameMode = 'classic' | 'moveLimit';
 
 export default function App() {
+  const [showRateModal, setShowRateModal] = useState<boolean>(false);
+  const getWebViewVersion = (): number => {
+    if (typeof navigator !== 'undefined') {
+      const match = navigator.userAgent.match(/Chrom(e|ium)\/([0-9]+)\./);
+      return match ? parseInt(match[2], 10) : 100; // Bulamazsa modern varsay
+    }
+    return 100;
+  };
+
+  const [isOutdatedWebView, setIsOutdatedWebView] = useState<boolean>(false);
+
+  const [gameMode, setGameMode] = useState<GameMode | null>(null);
+  const gameModeRef = useRef<GameMode | null>(null);
+  useEffect(() => { gameModeRef.current = gameMode; }, [gameMode]);
+  
+  const [maxUnlockedLevel, setMaxUnlockedLevel] = useState<number>(() => Number(localStorage.getItem('grid-evo-challenge-max-unlocked')) || 1);
+  const maxUnlockedLevelRef = useRef<number>(1);
+  useEffect(() => { maxUnlockedLevelRef.current = maxUnlockedLevel; }, [maxUnlockedLevel]);
+  
+  const [isViewingChallengeTree, setIsViewingChallengeTree] = useState<boolean>(false);
+  
+  const [challengeLevel, setChallengeLevel] = useState<number>(1);
+  const challengeLevelRef = useRef<number>(1);
+  useEffect(() => { challengeLevelRef.current = challengeLevel; }, [challengeLevel]);
+  const [movesLeft, setMovesLeft] = useState<number>(80);
+
+  const handleOpenSettings = useCallback(() => {
+    setIsSettingsOpen(true);
+  }, []);
   const [currentLang, setCurrentLang] = useState(() => {
     const savedLang = localStorage.getItem('grid-evo-lang');
     if (savedLang && TRANSLATIONS[savedLang]) return savedLang;
@@ -1370,10 +1663,9 @@ export default function App() {
         cap.Plugins.StatusBar.setStyle({ style: 'DARK' });
         cap.Plugins.StatusBar.setOverlaysWebView({ overlay: false });
       }
-      if (cap?.Plugins?.NavigationBar) {
-        cap.Plugins.NavigationBar.setColor({ color: '#000000', darkButtons: false });
-      }
-    } catch (_e) { /* Plugin not available â€” graceful degradation */ }
+    } catch (_e) {
+      console.log("StatusBar native bridge not ready");
+    }
   }, []);
 
   const t = useMemo(() => {
@@ -1397,26 +1689,15 @@ export default function App() {
   const [highScore, setHighScore] = useState<number>(0);
   const [highestLevel, setHighestLevel] = useState<number>(1);
   const [gameOver, setGameOver] = useState<boolean>(false);
-  const [gameOverStats, setGameOverStats] = useState<{ isNewRecord: boolean, maxBlock: number, finalMoves: number, finalLevel: number, longestCombo: number } | null>(null);
+  const [gameOverStats, setGameOverStats] = useState<{ isNewRecord: boolean, maxBlock: number, finalMoves: number, finalLevel: number, longestCombo: number, isVictory?: boolean } | null>(null);
   const [moves, setMoves] = useState<number>(0);
   const movesRef = useRef(0);
   useEffect(() => { movesRef.current = moves; }, [moves]);
   const [maxBlock, setMaxBlock] = useState<number>(2);
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
-  const [previewDir, setPreviewDir] = useState<{ r: number, c: number } | null>(null);
-  const [delayedPreviewDir, setDelayedPreviewDir] = useState<{ r: number, c: number } | null>(null);
   const [isMouseDown, setIsMouseDown] = useState(false);
 
-  useEffect(() => {
-    if (previewDir) {
-      const timer = setTimeout(() => {
-        setDelayedPreviewDir(previewDir);
-      }, 200);
-      return () => clearTimeout(timer);
-    } else {
-      setDelayedPreviewDir(null);
-    }
-  }, [previewDir]);
+  // previewDir useEffect removed to fix TS compilation errors
 
   const [flashBar, setFlashBar] = useState(false);
   const [isAppVisible, setIsAppVisible] = useState(true);
@@ -1443,6 +1724,10 @@ export default function App() {
   // Post-native loading screen: shows cyber-pastel loader until core game state is ready
   const [appReady, setAppReady] = useState(false);
   useEffect(() => {
+    const version = getWebViewVersion();
+    if (version < 95) {
+      setIsOutdatedWebView(true);
+    }
     // Allow one frame for React to mount + localStorage reads to settle
     const raf = requestAnimationFrame(() => {
       setAppReady(true);
@@ -1454,6 +1739,12 @@ export default function App() {
   const [showRecoveryModal, setShowRecoveryModal] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [savedGameData, setSavedGameData] = useState<any>(null);
+
+  const isViewingChallengeTreeRef = useRef<boolean>(false);
+  const showExitConfirmRef = useRef<boolean>(false);
+
+  useEffect(() => { isViewingChallengeTreeRef.current = isViewingChallengeTree; }, [isViewingChallengeTree]);
+  useEffect(() => { showExitConfirmRef.current = showExitConfirm; }, [showExitConfirm]);
 
   const levelInfo = useMemo(() => getLevelInfo(score), [score]);
   
@@ -1486,6 +1777,7 @@ export default function App() {
   const [hammerCharge, setHammerCharge] = useState<number>(100);
   const [isIdle, setIsIdle] = useState(false);
   const isMovingRef = useRef(false);
+  const lastVoidPos = useRef<{ r: number, c: number } | null>(null);
 
   useEffect(() => {
     setIsIdle(false);
@@ -1502,7 +1794,9 @@ export default function App() {
       recovery: showRecoveryModal,
       exit: showExitConfirm,
       reset: showResetConfirm,
-      game: gameOver
+      game: gameOver,
+      isMainMenu: gameMode === null,
+      isChallengeTree: isViewingChallengeTree
   });
 
   useEffect(() => {
@@ -1512,53 +1806,73 @@ export default function App() {
           recovery: showRecoveryModal,
           exit: showExitConfirm,
           reset: showResetConfirm,
-          game: gameOver
+          game: gameOver,
+          isMainMenu: gameMode === null,
+          isChallengeTree: isViewingChallengeTree
       };
-  }, [isSettingsOpen, showInfoModal, showRecoveryModal, showExitConfirm, showResetConfirm, gameOver]);
+  }, [isSettingsOpen, showInfoModal, showRecoveryModal, showExitConfirm, showResetConfirm, gameOver, gameMode, isViewingChallengeTree]);
 
   useEffect(() => {
-      if (typeof window !== 'undefined') {
-          // Lock to portrait if possible
+    let backButtonListener: any = null;
+
+    const setupBackButton = async () => {
+      try {
+        const { App } = await import('@capacitor/app');
+        
+        // Varsa eski dinleyiciyi temizle
+        if (backButtonListener) {
+          backButtonListener.remove();
+        }
+
+        backButtonListener = await App.addListener('backButton', () => {
           try {
-              if (window.screen && window.screen.orientation && (window.screen.orientation as any).lock) {
-                  (window.screen.orientation as any).lock('portrait').catch(() => {});
-              }
-          } catch(e) {}
+            // 1. KORUMA: Çıkış onay modalı açıksa kapat ve çık
+            if (showExitConfirmRef.current) {
+              setShowExitConfirm(false);
+              return;
+            }
 
-          const handleBackButton = (e: any) => {
-              e.preventDefault();
-              const m = modalsRef.current;
-              
-              if (m.settings) setIsSettingsOpen(false);
-              else if (m.info) setShowInfoModal(false);
-              else if (m.reset) setShowResetConfirm(false);
-              else if (m.exit) setShowExitConfirm(false);
-              else if (!m.game && !m.recovery) setShowExitConfirm(true);
-          };
+            // 2. KORUMA: Ana menüdeysek çıkış onay modalını aç
+            if (gameModeRef.current === null) {
+              setShowExitConfirm(true);
+              return;
+            }
 
-          // Try to attach Capacitor back button if available
-          let capBackListener: any = null;
-          if ((window as any)?.Capacitor?.Plugins?.App) {
-              (window as any).Capacitor.Plugins.App.addListener('backButton', handleBackButton).then((l: any) => {
-                  capBackListener = l;
-              }).catch(() => {});
+            // 3. KORUMA: Challenge Bölüm Ağacı (Level Tree) ekranındaysak ana menüye dön
+            if (gameModeRef.current === 'moveLimit' && isViewingChallengeTreeRef.current) {
+              setGameMode(null);
+              setIsViewingChallengeTree(false);
+              return;
+            }
+
+            // 4. KORUMA: Aktif oyun esnasındaysak ana menüye dön
+            if (gameModeRef.current !== null) {
+              handleBackToMenu();
+            }
+          } catch (innerError) {
+            console.error("Geri tuşu iç mantık hatası:", innerError);
           }
-
-          document.addEventListener('backbutton', handleBackButton, false);
-
-          window.history.pushState({ isApp: true }, '');
-          const handlePopState = (e: PopStateEvent) => {
-              window.history.pushState({ isApp: true }, '');
-              handleBackButton(e);
-          };
-          window.addEventListener('popstate', handlePopState);
-
-          return () => {
-              document.removeEventListener('backbutton', handleBackButton);
-              window.removeEventListener('popstate', handlePopState);
-              if (capBackListener && capBackListener.remove) capBackListener.remove();
-          };
+        });
+      } catch (err) {
+        console.error("Capacitor App plugin yüklenemedi:", err);
       }
+    };
+
+    setupBackButton();
+
+    // Lock to portrait if possible
+    try {
+      if (typeof window !== 'undefined' && window.screen && window.screen.orientation && (window.screen.orientation as any).lock) {
+        (window.screen.orientation as any).lock('portrait').catch(() => {});
+      }
+    } catch(e) {}
+
+    // MEMORY LEAK VE ÇAKIŞMA ÖNLEYİCİ CLEANUP
+    return () => {
+      if (backButtonListener) {
+        backButtonListener.remove();
+      }
+    };
   }, []);
 
   const entropyLimit = useMemo(() => {
@@ -1967,29 +2281,15 @@ export default function App() {
 
     if (savedHighScore) setHighScore(parseInt(savedHighScore, 10));
     if (savedHighestLevel) setHighestLevel(parseInt(savedHighestLevel, 10));
-
-    // Check for saved game state
-    const savedSession = localStorage.getItem('grid-evo-session');
-    if (savedSession) {
-      try {
-        const data = JSON.parse(savedSession);
-        if (data.tiles && data.tiles.length > 0 && data.moves > 0) {
-          setSavedGameData(data);
-          setShowRecoveryModal(true);
-          return; // Wait for user choice
-        }
-      } catch (e) {
-        localStorage.removeItem('grid-evo-session');
-      }
-    }
-
-    initializeGame();
   }, []);
 
   // Save game session whenever key states change
   useEffect(() => {
+    if (!gameMode) return;
+    const saveKey = gameMode === 'classic' ? 'grid-evo-session-classic' : 'grid-evo-session-challenge';
+
     if (tiles.length > 0 && !gameOver && moves > 0) {
-      const session = {
+      const session: any = {
         tiles,
         score,
         moves,
@@ -1998,11 +2298,15 @@ export default function App() {
         powerUps,
         history
       };
-      localStorage.setItem('grid-evo-session', JSON.stringify(session));
+      if (gameMode === 'moveLimit') {
+        session.movesLeft = movesLeft;
+        session.challengeLevel = challengeLevelRef.current;
+      }
+      localStorage.setItem(saveKey, JSON.stringify(session));
     } else if (gameOver || (tiles.length > 0 && moves === 0)) {
-      localStorage.removeItem('grid-evo-session');
+      localStorage.removeItem(saveKey);
     }
-  }, [tiles, score, moves, gridSize, maxBlock, powerUps, history, gameOver]);
+  }, [tiles, score, moves, gridSize, maxBlock, powerUps, history, gameOver, gameMode, movesLeft]);
 
   const loadSavedGame = () => {
     if (savedGameData) {
@@ -2020,13 +2324,27 @@ export default function App() {
   };
 
   const discardSavedGame = () => {
-    localStorage.removeItem('grid-evo-session');
+    localStorage.removeItem('grid-evo-session-classic');
     setShowRecoveryModal(false);
     setSavedGameData(null);
-    initializeGame();
+    initializeGame('classic');
   };
 
   useEffect(() => {
+    if (gameMode === 'moveLimit' && movesLeft <= 0 && !gameOver) {
+       setGameOver(true);
+       setGameOverStats({
+           isNewRecord: score > highScore,
+           maxBlock: maxBlock,
+           finalMoves: moves,
+           finalLevel: levelInfo.level,
+           longestCombo: 0
+       });
+    }
+  }, [movesLeft, gameMode, gameOver, score, highScore, maxBlock, moves, levelInfo.level]);
+
+  useEffect(() => {
+    if (gameMode === 'moveLimit') return;
     const currentLevel = levelInfo.level;
     let targetGridSize = 4;
     
@@ -2071,6 +2389,13 @@ export default function App() {
   }, [score, highestLevel, gridSize, levelInfo.level, maxBlock, triggerHaptic]);
 
   const generateSpawnValue = useCallback((lvl: number) => {
+    // BEREKET modu kontrolü: moveLimit modunda lucky ise sadece 4 ve 8 doğar
+    if (gameModeRef.current === 'moveLimit') {
+      const currentConfig = CHALLENGE_LEVELS[challengeLevelRef.current - 1];
+      if (currentConfig?.tileSpawnModifier === 'lucky') {
+        return Math.random() < 0.8 ? 4 : 8; // Bereket modunda 2 yasak!
+      }
+    }
     const rand = Math.random();
     if (lvl >= 4) {
       if (rand < 0.05) return 8;  // %5 şansla 8 doğar
@@ -2084,27 +2409,47 @@ export default function App() {
     return 2;
   }, []);
 
-  const initializeGame = useCallback(() => {
+  const handleBackToMenu = useCallback(() => {
+    setGameMode(null);
+    setGameOver(false);
+    setGameOverStats(null);
+    setTiles([]);
     localStorage.removeItem('grid-evo-session');
+  }, []);
+
+  const initializeGame = useCallback((explicitMode?: GameMode, targetLvl?: number) => {
+    const activeMode = explicitMode || gameMode;
+    const currentLvl = targetLvl || challengeLevelRef.current;
+    const currentConfig = CHALLENGE_LEVELS[currentLvl - 1] || CHALLENGE_LEVELS[0];
+    
+    if (activeMode === 'classic') localStorage.removeItem('grid-evo-session-classic');
+    if (activeMode === 'moveLimit') localStorage.removeItem('grid-evo-session-challenge');
     setScore(0);
     setScoreMultiplier(1);
     setGameOver(false);
     setGameOverStats(null);
     setMoves(0);
+    if (activeMode === 'moveLimit') {
+      setMovesLeft(currentConfig.moves);
+    }
     setHistory([]);
     setPowerUps({ undo: 3, clear: 1, shuffle: 1 });
     setHammerCharge(100);
-    setGridSize(4);
-    gridSizeRef.current = 4;
+    
+    const activeGridSize = (activeMode === 'moveLimit' && currentConfig.gridSize) ? currentConfig.gridSize : 4;
+    setGridSize(activeGridSize);
+    gridSizeRef.current = activeGridSize;
+    
+    lastVoidPos.current = null;
     vfxRef.current?.clearEffects();
     setTiles([]);
 
     setTimeout(() => {
-      const r1 = Math.floor(Math.random() * 4), c1 = Math.floor(Math.random() * 4);
+      const r1 = Math.floor(Math.random() * activeGridSize), c1 = Math.floor(Math.random() * activeGridSize);
       let r2, c2;
       do {
-        r2 = Math.floor(Math.random() * 4);
-        c2 = Math.floor(Math.random() * 4);
+        r2 = Math.floor(Math.random() * activeGridSize);
+        c2 = Math.floor(Math.random() * activeGridSize);
       } while (r1 === r2 && c1 === c2);
 
       setTiles([
@@ -2112,7 +2457,7 @@ export default function App() {
         { id: generateId(), value: generateSpawnValue(1), row: r2, col: c2, isNew: true }
       ]);
     }, 0);
-  }, [generateSpawnValue]);
+  }, [generateSpawnValue, gameMode]);
 
   const handleHardReset = () => {
       localStorage.removeItem('grid-evo-session');
@@ -2159,81 +2504,6 @@ export default function App() {
     }
     return true; // No moves or merges possible
   }, []);
-
-  const ghostTiles = useMemo(() => {
-    if (lowPerformanceMode) return [];
-    if (!delayedPreviewDir) return [];
-    
-    const gSize = gridSize;
-    const activeTiles = tiles.filter(t => !t.isDying);
-    const board: (TileConfig | null)[][] = Array(gSize).fill(null).map(() => Array(gSize).fill(null));
-    activeTiles.forEach(t => {
-      if (t.row >= 0 && t.row < gSize && t.col >= 0 && t.col < gSize) {
-        board[t.row][t.col] = { ...t, isNew: false, isMerged: false, hasMoved: false };
-      }
-    });
-
-    const processCell = (r: number, c: number, dr: number, dc: number) => {
-      const tile = board[r][c];
-      if (!tile || tile.isVoid) return;
-
-      let targetR = r;
-      let targetC = c;
-      let willMergeWith: TileConfig | null = null;
-
-      while(true) {
-          const nextR = targetR + dr;
-          const nextC = targetC + dc;
-          if (nextR < 0 || nextR >= gSize || nextC < 0 || nextC >= gSize) break;
-          
-          const nextTile = board[nextR][nextC];
-          if (nextTile) {
-              if (!nextTile.isVoid && nextTile.value === tile.value && !nextTile.isMerged) {
-                  willMergeWith = nextTile;
-                  targetR = nextR;
-                  targetC = nextC;
-              }
-              break;
-          }
-          targetR = nextR;
-          targetC = nextC;
-      }
-
-      if (willMergeWith) {
-          const newValue = tile.value * 2;
-          board[r][c] = null;
-          board[targetR][targetC] = {
-              id: willMergeWith.id,
-              value: newValue,
-              row: targetR,
-              col: targetC,
-              isMerged: true,
-              isVoid: false,
-              isGhost: true
-          };
-      } else if (targetR !== r || targetC !== c) {
-          board[r][c] = null;
-          board[targetR][targetC] = { ...tile, row: targetR, col: targetC, isGhost: true };
-      } else {
-          board[r][c] = { ...tile, isGhost: true };
-      }
-    };
-
-    if (delayedPreviewDir.c === -1) for (let c = 1; c < gSize; c++) for (let r = 0; r < gSize; r++) processCell(r, c, 0, -1);
-    else if (delayedPreviewDir.c === 1) for (let c = gSize - 2; c >= 0; c--) for (let r = 0; r < gSize; r++) processCell(r, c, 0, 1);
-    else if (delayedPreviewDir.r === -1) for (let r = 1; r < gSize; r++) for (let c = 0; c < gSize; c++) processCell(r, c, -1, 0);
-    else if (delayedPreviewDir.r === 1) for (let r = gSize - 2; r >= 0; r--) for (let c = 0; c < gSize; c++) processCell(r, c, 1, 0);
-
-    const ghosts: TileConfig[] = [];
-    for (let r = 0; r < gSize; r++) {
-        for (let c = 0; c < gSize; c++) {
-            if (board[r][c] && !board[r][c]!.isVoid && board[r][c]!.isGhost) {
-                ghosts.push({ ...board[r][c]!, id: board[r][c]!.id + '-ghost' });
-            }
-        }
-    }
-    return ghosts;
-  }, [tiles, delayedPreviewDir, gridSize]);
 
   const sideEffectsRef = useRef<{ voidPops: number, mergeVal: number, combo: number, hasMerge: boolean, entropyFired: boolean } | null>(null);
 
@@ -2348,7 +2618,6 @@ export default function App() {
             changed = true;
         }
       };
-
       if (dirCol === -1) for (let c = 1; c < gSize; c++) for (let r = 0; r < gSize; r++) processCell(r, c, 0, -1);
       else if (dirCol === 1) for (let c = gSize - 2; c >= 0; c--) for (let r = 0; r < gSize; r++) processCell(r, c, 0, 1);
       else if (dirRow === -1) for (let r = 1; r < gSize; r++) for (let c = 0; c < gSize; c++) processCell(r, c, -1, 0);
@@ -2453,6 +2722,7 @@ export default function App() {
             entropyFired: isEntropyApplied
         };
 
+        const spawnedTiles: TileConfig[] = [];
         if (emptySpots.length > 0) {
           const currentLevel = getLevelInfo(scoreRef.current).level;
           let spawnCount = 1;
@@ -2463,7 +2733,7 @@ export default function App() {
               const spotIndex = Math.floor(Math.random() * emptySpots.length);
               const spot = emptySpots[spotIndex];
               
-              nextTiles.push({ 
+              spawnedTiles.push({ 
                   id: generateId(), 
                   value: generateSpawnValue(currentLevel), 
                   row: spot.r, 
@@ -2477,19 +2747,36 @@ export default function App() {
           const maxVoids = gSize === 4 ? 2 : gSize === 5 ? 4 : 6; // 6x6 gridde aynı anda en fazla 6 void çıkabilsin
           const currentVoids = nextTiles.filter(t => t.isVoid && !t.isDying).length;
           
-          if (emptySpots.length > 0 && Math.floor(movesRef.current + 1) % 5 === 0 && currentVoids < maxVoids) {
-              const baseChance = 0.60;
-              const levelBonus = (currentLevel - 1) * 0.05;
-              const voidChance = Math.min(baseChance + levelBonus, 0.95);
-
+          let spawnInterval = 5;
+          let voidChance = Math.min(0.60 + (currentLevel - 1) * 0.05, 0.95);
+          let currentMaxVoids = maxVoids;
+          let voidDurationBonus = 0;
+          
+          if (gameModeRef.current === 'moveLimit') {
+              const currentConfig = CHALLENGE_LEVELS[challengeLevelRef.current - 1] || CHALLENGE_LEVELS[0];
+              spawnInterval = currentConfig.voidInterval;
+              voidChance = currentConfig.voidChance;
+              // KABUS modu: Engeller tahtada +2 hamle daha uzun kalır
+              if (currentConfig.levelStyle === 'KABUS') {
+                  voidDurationBonus = 2;
+              }
+          }
+          
+          if (emptySpots.length > 0 && Math.floor(movesRef.current + 1) % spawnInterval === 0 && currentVoids < currentMaxVoids) {
               if (Math.random() < voidChance) {
-                  const innerSpots = emptySpots.filter(spot => spot.r > 0 && spot.r < gSize - 1 && spot.c > 0 && spot.c < gSize - 1);
-                  const outerSpots = emptySpots.filter(spot => spot.r === 0 || spot.r === gSize - 1 || spot.c === 0 || spot.c === gSize - 1);
+                  // Filter emptySpots to prevent spawning consecutively in the last void position
+                  let validSpots = emptySpots.filter(spot => spot.r !== lastVoidPos.current?.r || spot.c !== lastVoidPos.current?.c);
+                  if (validSpots.length === 0) {
+                      validSpots = emptySpots; // Fallback: use all empty spots if only the last void cell is available
+                  }
+
+                  const innerSpots = validSpots.filter(spot => spot.r > 0 && spot.r < gSize - 1 && spot.c > 0 && spot.c < gSize - 1);
+                  const outerSpots = validSpots.filter(spot => spot.r === 0 || spot.r === gSize - 1 || spot.c === 0 || spot.c === gSize - 1);
                   let voidSpot;
                   let spotsToVoid: {r: number, c: number}[] = [];
                   
                   if (gSize >= 5 && Math.random() < 0.3 && innerSpots.length > 0) {
-                      const potentialTopLefts = emptySpots.filter(s => 
+                      const potentialTopLefts = validSpots.filter(s => 
                           s.r < gSize - 1 && s.c < gSize - 1 &&
                           emptySpots.find(e => e.r === s.r + 1 && e.c === s.c) &&
                           emptySpots.find(e => e.r === s.r && e.c === s.c + 1) &&
@@ -2520,10 +2807,11 @@ export default function App() {
                   }
 
                   if (spotsToVoid.length > 0) {
-                      const voidDuration = gSize >= 5 ? 6 + Math.floor(Math.random() * 3) : (Math.random() < 0.5 ? 4 : 5);
+                      const baseDuration = gSize >= 5 ? 6 + Math.floor(Math.random() * 3) : (Math.random() < 0.5 ? 4 : 5);
+                      const voidDuration = baseDuration + voidDurationBonus;
                       playVoidCreate();
                       spotsToVoid.forEach(spot => {
-                          nextTiles.push({
+                          spawnedTiles.push({
                               id: generateId(),
                               value: 0,
                               row: spot.r,
@@ -2533,6 +2821,8 @@ export default function App() {
                               isNew: true
                           });
                       });
+                      // Remember this void position to prevent sequential spawn here
+                      lastVoidPos.current = { r: spotsToVoid[0].r, c: spotsToVoid[0].c };
                   }
               }
           }
@@ -2541,6 +2831,16 @@ export default function App() {
         // --- DEFER STATE UPDATES (Single Batched Update at 160ms) ---
         const dyingIds = new Set(dyingTiles.map(t => t.id));
         const delayTime = lowPerformanceMode ? 0 : 160;
+
+        // Render Pipeline Fix: Spawn tiles after 30ms to break the CPU spike
+        if (spawnedTiles.length > 0) {
+            setTimeout(() => {
+                requestAnimationFrame(() => {
+                    setTiles(current => [...current, ...spawnedTiles]);
+                });
+            }, 30);
+        }
+
         setTimeout(() => {
             requestAnimationFrame(() => {
                 // Clean up dying tiles first
@@ -2559,6 +2859,9 @@ export default function App() {
 
                 setHistory(h => [...h, { tiles: prevTiles, score: scoreRef.current, gridSize: gSize, moves: movesRef.current }].slice(-10));
                 setMoves(m => m + 1);
+                if (gameModeRef.current === 'moveLimit') {
+                  setMovesLeft(prev => Math.max(0, prev - 1));
+                }
                 setHammerCharge(prev => {
                     if (prev < 100) {
                         const next = Math.min(100, prev + 1);
@@ -2599,11 +2902,35 @@ export default function App() {
                   return newScore;
                 });
 
-                const nextValidState = nextTiles.filter(t => !t.isDying);
+                const nextValidState = [...nextTiles, ...spawnedTiles].filter(t => !t.isDying);
                 const currentMaxBlock = Math.max(...nextValidState.filter(t => !t.isVoid).map(t => t.value), 2);
                 setMaxBlock(prev => Math.max(prev, currentMaxBlock));
 
-                if (checkGameOver(nextValidState, gSize)) {
+                const currentTarget = gameModeRef.current === 'moveLimit' ? (CHALLENGE_LEVELS[challengeLevelRef.current - 1]?.target || 1024) : 2048;
+                if (gameModeRef.current === 'moveLimit' && currentMaxBlock >= currentTarget) {
+                   if (challengeLevelRef.current === maxUnlockedLevelRef.current && challengeLevelRef.current < 105) {
+                       const nextMax = challengeLevelRef.current + 1;
+                       setMaxUnlockedLevel(nextMax);
+                       localStorage.setItem('grid-evo-challenge-max-unlocked', String(nextMax));
+                   }
+                   setGameOver(true);
+                   const nextScore = scoreRef.current + finalScoreUpdate;
+                   const isRecord = nextScore > highScore;
+                   setGameOverStats({
+                       isNewRecord: isRecord,
+                       maxBlock: currentMaxBlock,
+                       finalMoves: movesRef.current + 1,
+                       finalLevel: getLevelInfo(nextScore).level,
+                       longestCombo: Math.max(longestCombo, mergesInMove),
+                       isVictory: true
+                   });
+                   const hasRated = localStorage.getItem('grid-evo-already-rated') === 'true';
+                   if (!hasRated && challengeLevelRef.current >= 10) {
+                       // 10. bölümde olan yeni oyuncularda ve 10. bölümü halihazırda geçmiş eski oyuncuların güncelleme sonrası ilk zaferinde tetiklenir
+                       setShowRateModal(true);
+                   }
+                   if (isRecord) setConfetti(Date.now());
+                } else if (checkGameOver(nextValidState, gSize)) {
                    setGameOver(true);
                    const nextScore = scoreRef.current + finalScoreUpdate;
                    const isRecord = nextScore > highScore;
@@ -2614,6 +2941,12 @@ export default function App() {
                        finalLevel: getLevelInfo(nextScore).level,
                        longestCombo: Math.max(longestCombo, mergesInMove)
                    });
+                   if (gameModeRef.current === 'classic') {
+                       const hasRated = localStorage.getItem('grid-evo-already-rated') === 'true';
+                       if (!hasRated) {
+                           setShowRateModal(true);
+                       }
+                   }
                    if (isRecord) setConfetti(Date.now());
                 }
             });
@@ -2633,6 +2966,9 @@ export default function App() {
     // Fire deferred side effects OUTSIDE setTiles
     const fx = sideEffectsRef.current;
     if (fx) {
+        if (gameModeRef.current === 'moveLimit') {
+            setMovesLeft(prev => Math.max(0, prev - 1));
+        }
         if (fx.voidPops > 0) playVoidPop();
         if (fx.entropyFired) {
             playEntropyPenalty();
@@ -2718,37 +3054,17 @@ export default function App() {
       if (gameOver || isSettingsOpen || showInfoModal) return;
       if (isHammerActive) return;
       
-      let nextDir: { r: number, c: number } | null = null;
       switch (e.key) {
-        case 'ArrowUp': case 'w': case 'W': e.preventDefault(); nextDir = { r: -1, c: 0 }; break;
-        case 'ArrowDown': case 's': case 'S': e.preventDefault(); nextDir = { r: 1, c: 0 }; break;
-        case 'ArrowLeft': case 'a': case 'A': e.preventDefault(); nextDir = { r: 0, c: -1 }; break;
-        case 'ArrowRight': case 'd': case 'D': e.preventDefault(); nextDir = { r: 0, c: 1 }; break;
-      }
-      
-      if (nextDir) {
-          setPreviewDir(prev => prev?.r === nextDir!.r && prev?.c === nextDir!.c ? prev : nextDir);
-      }
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (gameOver || isSettingsOpen || showInfoModal) {
-          setPreviewDir(null);
-          return;
-      }
-      if (isHammerActive) return;
-      switch (e.key) {
-        case 'ArrowUp': case 'w': case 'W': setPreviewDir(null); handleMove(-1, 0); break;
-        case 'ArrowDown': case 's': case 'S': setPreviewDir(null); handleMove(1, 0); break;
-        case 'ArrowLeft': case 'a': case 'A': setPreviewDir(null); handleMove(0, -1); break;
-        case 'ArrowRight': case 'd': case 'D': setPreviewDir(null); handleMove(0, 1); break;
+        case 'ArrowUp': case 'w': case 'W': e.preventDefault(); handleMove(-1, 0); break;
+        case 'ArrowDown': case 's': case 'S': e.preventDefault(); handleMove(1, 0); break;
+        case 'ArrowLeft': case 'a': case 'A': e.preventDefault(); handleMove(0, -1); break;
+        case 'ArrowRight': case 'd': case 'D': e.preventDefault(); handleMove(0, 1); break;
       }
     };
     if (typeof window !== 'undefined') {
         window.addEventListener('keydown', handleKeyDown, { passive: false });
-        window.addEventListener('keyup', handleKeyUp);
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
-            window.removeEventListener('keyup', handleKeyUp);
         };
     }
   }, [handleMove, gameOver, isSettingsOpen, showInfoModal, isHammerActive]);
@@ -2774,65 +3090,41 @@ export default function App() {
   const onTouchMove = (e: React.TouchEvent | React.MouseEvent) => {
     if (touchStart) {
         if ('touches' in e) e.preventDefault();
-        
-        if (!('touches' in e) && !isMouseDown) return;
-
-        if (lowPerformanceMode) return;
-        const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
-        const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
-
-        const dx = clientX - touchStart.x;
-        const dy = clientY - touchStart.y;
-
-        let nextDir: { r: number, c: number } | null = null;
-        if (Math.abs(dx) > Math.abs(dy)) {
-          if (Math.abs(dx) > 10) nextDir = dx > 0 ? { r: 0, c: 1 } : { r: 0, c: -1 };
-        } else {
-          if (Math.abs(dy) > 10) nextDir = dy > 0 ? { r: 1, c: 0 } : { r: -1, c: 0 };
-        }
-        if (nextDir) {
-           setPreviewDir(prev => prev?.r === nextDir!.r && prev?.c === nextDir!.c ? prev : nextDir);
-        }
     }
   };
 
   const onTouchEnd = (e?: React.TouchEvent | React.MouseEvent) => {
-    if (touchStart) {
-        if (lowPerformanceMode && e) {
-            let clientX: number | undefined;
-            let clientY: number | undefined;
+    if (touchStart && e) {
+        let clientX: number | undefined;
+        let clientY: number | undefined;
 
-            if ('changedTouches' in e && e.changedTouches.length > 0) {
-                clientX = e.changedTouches[0].clientX;
-                clientY = e.changedTouches[0].clientY;
-            } else if ('touches' in e && e.touches.length > 0) {
-                clientX = e.touches[0].clientX;
-                clientY = e.touches[0].clientY;
-            } else if ('clientX' in e) {
-                clientX = (e as React.MouseEvent).clientX;
-                clientY = (e as React.MouseEvent).clientY;
+        if ('changedTouches' in e && e.changedTouches.length > 0) {
+            clientX = e.changedTouches[0].clientX;
+            clientY = e.changedTouches[0].clientY;
+        } else if ('touches' in e && e.touches.length > 0) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else if ('clientX' in e) {
+            clientX = (e as React.MouseEvent).clientX;
+            clientY = (e as React.MouseEvent).clientY;
+        }
+
+        if (clientX !== undefined && clientY !== undefined) {
+            const dx = clientX - touchStart.x;
+            const dy = clientY - touchStart.y;
+
+            let dir: { r: number, c: number } | null = null;
+            if (Math.abs(dx) > Math.abs(dy)) {
+              if (Math.abs(dx) > 15) dir = dx > 0 ? { r: 0, c: 1 } : { r: 0, c: -1 };
+            } else {
+              if (Math.abs(dy) > 15) dir = dy > 0 ? { r: 1, c: 0 } : { r: -1, c: 0 };
             }
-
-            if (clientX !== undefined && clientY !== undefined) {
-                const dx = clientX - touchStart.x;
-                const dy = clientY - touchStart.y;
-
-                let dir: { r: number, c: number } | null = null;
-                if (Math.abs(dx) > Math.abs(dy)) {
-                  if (Math.abs(dx) > 15) dir = dx > 0 ? { r: 0, c: 1 } : { r: 0, c: -1 };
-                } else {
-                  if (Math.abs(dy) > 15) dir = dy > 0 ? { r: 1, c: 0 } : { r: -1, c: 0 };
-                }
-                if (dir) {
-                    handleMove(dir.r, dir.c);
-                }
+            if (dir) {
+                handleMove(dir.r, dir.c);
             }
-        } else if (previewDir) {
-            handleMove(previewDir.r, previewDir.c);
         }
     }
     setTouchStart(null);
-    setPreviewDir(null);
     setIsMouseDown(false);
   };
 
@@ -2844,185 +3136,105 @@ export default function App() {
 
   const tileSizePercent = useMemo(() => `calc((100% - ${(gridSize - 1) * 12}px) / ${gridSize})`, [gridSize]);
 
-  // Loading screen for slow tablets â€” shows while core state initializes
-  if (!appReady) {
-    return (
-      <div className="h-screen w-full flex flex-col items-center justify-center bg-[#1E1E1E] font-sans text-white select-none">
-        {/* Pulsing diamond outline */}
-        <motion.div
-          animate={{ opacity: [0.3, 0.8, 0.3], scale: [0.95, 1.05, 0.95] }}
-          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-          className="mb-10"
-        >
-          <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="12" y="12" width="40" height="40" rx="8" stroke="rgba(168,162,158,0.5)" strokeWidth="1.5" transform="rotate(45 32 32)" fill="none" />
-            <rect x="20" y="20" width="24" height="24" rx="4" stroke="rgba(168,162,158,0.3)" strokeWidth="1" transform="rotate(45 32 32)" fill="none" />
-          </svg>
-        </motion.div>
-        <motion.p
-          animate={{ opacity: [0.4, 0.9, 0.4] }}
-          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-          className="text-[10px] font-light tracking-[0.35em] uppercase text-white/50"
-        >
-          {t.loadingText}
-        </motion.p>
-      </div>
-    );
-  }
-
   return (
-    <motion.div
-      dir={currentLang === 'ar' ? 'rtl' : 'ltr'}
-      animate={{ backgroundColor: getBackgroundColor(gridSize) }}
-      transition={{ duration: 0.8, ease: "easeOut" }}
-      className="h-screen w-full flex flex-col items-center font-sans text-white overflow-hidden relative overscroll-none select-none"
-      style={{
-          paddingTop: '1.5rem',
-          paddingBottom: '1.5rem'
-      }}
-      onTouchStart={onTouchStart}
-      onTouchMove={onTouchMove}
-      onTouchEnd={onTouchEnd}
-      onMouseDown={onTouchStart}
-      onMouseMove={onTouchMove}
-      onMouseUp={onTouchEnd}
-      onMouseLeave={onTouchEnd}
-    >
-      <div className="mobile-landscape-warning absolute inset-0 z-[200] hidden bg-[#121212] items-center justify-center flex-col text-center p-6 h-screen">
-          <AlertTriangle size={48} className="text-[#6366F1] mb-6"/>
-          <h2 className="text-xl font-light tracking-[0.2em] mb-3 uppercase">{t.rotateDevice}</h2>
-          <p className="text-sm text-white/60 font-light tracking-widest leading-relaxed max-w-sm">
-             {t.warningText}
-          </p>
-      </div>
-
-      {/* Exit Confirmation Modal */}
-      <AnimatePresence>
-        {showExitConfirm && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className={`absolute inset-0 z-[100] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/90 backdrop-blur-lg'} flex flex-col items-center justify-center p-6`}
-          >
-            <motion.div
-              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
-              className="bg-[#050505] rounded-[2.5rem] w-full max-w-[320px] p-8 shadow-2xl border border-white/5 text-center"
-            >
-              <div className="w-16 h-16 bg-red-400/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                <AlertTriangle size={32} className="text-red-400" />
-              </div>
-              <h2 className={`text-xl font-light mb-3 text-white uppercase ${getTracking("tracking-[0.2em]", "tracking-wide")}`}>{t.wait}</h2>
-              <p className={`text-xs text-white/40 font-light leading-relaxed mb-8 ${getTracking("tracking-widest", "tracking-normal")}`}>
-                {t.areYouSureExit}
-              </p>
- 
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={() => {
-                      if ((window as any)?.Capacitor?.Plugins?.App) {
-                          (window as any).Capacitor.Plugins.App.exitApp();
-                      } else {
-                         setShowExitConfirm(false);
-                      }
-                  }}
-                  className={`w-full py-4 bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
-                >
-                  {t.exitApp}
-                </button>
-                <button
-                  onClick={() => setShowExitConfirm(false)}
-                  className={`w-full py-4 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
-                >
-                  {t.keepPlaying}
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Game Recovery Modal */}
-      <AnimatePresence>
-        {showRecoveryModal && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className={`absolute inset-0 z-[100] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/90 backdrop-blur-lg'} flex flex-col items-center justify-center p-6`}
-          >
-            <motion.div
-              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
-              className="bg-[#050505] rounded-[2.5rem] w-full max-w-[320px] p-8 shadow-2xl border border-white/5 text-center"
-            >
-              <div className="w-16 h-16 bg-[#A2D2FF]/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                <RotateCcw size={32} className="text-[#A2D2FF]" />
-              </div>
-              <h2 className="text-xl font-light tracking-[0.2em] mb-3 uppercase">{t.welcomeBack}</h2>
-              <p 
-                className="text-xs text-white/40 font-light tracking-widest leading-relaxed mb-8"
-                dangerouslySetInnerHTML={{ __html: t.recoveryText }}
-              />
-
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={loadSavedGame}
-                  className={`w-full py-4 bg-white text-black rounded-2xl text-xs uppercase font-light transition-transform active:scale-95 shadow-xl ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
-                >
-                  {t.continueGame}
-                </button>
-                <button
-                  onClick={discardSavedGame}
-                  className={`w-full py-4 bg-white/5 hover:bg-white/10 text-white/60 rounded-2xl text-xs uppercase font-light transition-colors border border-white/5 ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
-                >
-                  {t.startNew}
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      {/* Confetti Overflow */}
-      {isAppVisible && confetti > 0 && (
-        <div className="fixed inset-0 pointer-events-none z-[100] overflow-hidden">
-           {Array.from({ length: 40 }).map((_, i) => (
-             <div 
-               key={`${confetti}-${i}`} 
-               className="confetti absolute top-[-20px] w-2 h-4 rounded-sm" 
-               style={{ 
-                  left: `${Math.random() * 100}%`, 
-                  backgroundColor: ['#D7CCC8', '#DCEDC8', '#B2EBF2', '#F8BBD0', '#FFE082'][Math.floor(Math.random()*5)],
-                  animationDuration: `${2 + Math.random() * 2}s`,
-                  animationDelay: `${Math.random() * 0.5}s`
-               }} 
-             />
-           ))}
-        </div>
+    <div className="app-container relative w-full h-full">
+      {gameMode === null && (
+        <button 
+          onClick={() => setIsSettingsOpen(true)}
+          className="absolute top-6 right-6 z-[999] p-2 text-neutral-400 hover:text-white transition-colors pointer-events-auto"
+        >
+          <SettingsIcon size={24} />
+        </button>
       )}
 
+      {/* MODALS */}
       <AnimatePresence>
-        {flashActive && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 0.15, transition: { duration: 0.05 } }}
-            exit={{ opacity: 0, transition: { duration: 0.5, ease: 'easeOut' } }}
-            className="fixed inset-0 z-0 pointer-events-none bg-[#6366F1] block"
-          />
+        {isSettingsOpen && (
+          <motion.div
+             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+             className={`absolute inset-0 z-[60] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/80 backdrop-blur-md'} flex flex-col items-center justify-center p-6`}
+          >
+            <div className="bg-[#050505] rounded-3xl w-full max-w-[320px] p-6 shadow-2xl border border-white/5 relative">
+               <button onClick={() => setIsSettingsOpen(false)} className="absolute top-5 right-5 text-white/40 hover:text-white transition-colors">
+                 <X size={20}/>
+               </button>
+               <h3 className="text-lg font-light tracking-[0.2em] text-center mb-8 mt-2 uppercase">{t.settings}</h3>
+               
+               <div className="flex justify-between items-center mb-6 px-2">
+                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Volume2 size={18}/> {t.sound}</span>
+                  <button onClick={() => setSoundEnabled(!soundEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${soundEnabled ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
+                     <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${soundEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
+                  </button>
+               </div>
+               
+               <div className="flex justify-between items-center mb-8 px-2">
+                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Vibrate size={18}/> {t.haptics}</span>
+                  <button onClick={() => setHapticsEnabled(!hapticsEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${hapticsEnabled ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
+                     <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${hapticsEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
+                  </button>
+               </div>
+
+                <div className="flex justify-between items-center mb-8 px-2">
+                   <span className="font-light tracking-wide opacity-80 flex items-center gap-3">
+                      <Grid size={18} />
+                      {t.language}
+                   </span>
+                   <select
+                      value={currentLang}
+                      onChange={(e) => setCurrentLang(e.target.value)}
+                      className="bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs font-light tracking-wide text-white/80 focus:outline-none focus:ring-1 focus:ring-[#06B6D4] cursor-pointer"
+                   >
+                      <option value="en" className="bg-[#050505] text-white">English</option>
+                      <option value="tr" className="bg-[#050505] text-white">Türkçe</option>
+                      <option value="de" className="bg-[#050505] text-white">Deutsch</option>
+                      <option value="pl" className="bg-[#050505] text-white">Polski</option>
+                      <option value="es" className="bg-[#050505] text-white">Español</option>
+                      <option value="fr" className="bg-[#050505] text-white">Français</option>
+                      <option value="ru" className="bg-[#050505] text-white">Русский</option>
+                      <option value="it" className="bg-[#050505] text-white">Italiano</option>
+                      <option value="ko" className="bg-[#050505] text-white">한국어</option>
+                      <option value="ja" className="bg-[#050505] text-white">日本語</option>
+                      <option value="zh" className="bg-[#050505] text-white">简体中文</option>
+                      <option value="ar" className="bg-[#050505] text-white">العربية</option>
+                   </select>
+                </div>
+
+               <div className="flex justify-between items-center mb-8 px-2">
+                   <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Zap size={18}/> {t.reduceEffects}</span>
+                   <button onClick={() => setLowPerformanceMode(!lowPerformanceMode)} className={`w-12 h-6 rounded-full relative transition-colors ${lowPerformanceMode ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
+                      <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${lowPerformanceMode ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
+                   </button>
+                </div>
+
+               <div className="border-t border-white/5 pt-6 mt-2 flex flex-col gap-3">
+                  <button 
+                     onClick={() => {
+                        setIsSettingsOpen(false);
+                        setShowInfoModal(true);
+                        setInfoStep(1);
+                     }}
+                     className={`w-full py-3.5 rounded-xl bg-white/5 text-white/90 font-light text-xs hover:bg-white/10 transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}
+                  >
+                     {t.howToPlay}
+                  </button>
+                  {!showResetConfirm ? (
+                     <button onClick={() => setShowResetConfirm(true)} className={`w-full py-3.5 rounded-xl bg-red-500/10 text-red-400 font-light text-xs hover:bg-red-500/20 transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}>{t.resetProgress}</button>
+                  ) : (
+                     <div className="flex flex-col gap-3">
+                         <span className="text-center text-xs text-red-400 font-light tracking-widest flex items-center justify-center gap-2">
+                           <AlertTriangle size={14} /> {t.areYouSure}
+                         </span>
+                         <div className="flex gap-3">
+                             <button onClick={handleHardReset} className={`flex-1 py-3 rounded-xl bg-red-500/80 hover:bg-red-500 text-white font-light text-xs transition-colors ${getTracking("tracking-widest", "tracking-normal")}`}>{t.yes}</button>
+                             <button onClick={() => setShowResetConfirm(false)} className={`flex-1 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white/80 font-light text-xs transition-colors ${getTracking("tracking-widest", "tracking-normal")}`}>{t.no}</button>
+                         </div>
+                     </div>
+                  )}
+               </div>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
-
-      <AnimatePresence>
-        {hexaGlow && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 1 }}
-            className="fixed inset-0 z-[100] pointer-events-none mix-blend-screen"
-            style={{
-              background: 'radial-gradient(circle at center, transparent 0%, rgba(255, 215, 0, 0.15) 100%)'
-            }}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Info Modal */}
       <AnimatePresence>
         {showInfoModal && (
           <motion.div
@@ -3122,8 +3334,85 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {showExitConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className={`absolute inset-0 z-[100] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/90 backdrop-blur-lg'} flex flex-col items-center justify-center p-6`}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
+              className="bg-[#050505] rounded-[2.5rem] w-full max-w-[320px] p-8 shadow-2xl border border-white/5 text-center"
+            >
+              <div className="w-16 h-16 bg-red-400/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <AlertTriangle size={32} className="text-red-400" />
+              </div>
+              <h2 className={`text-xl font-light mb-3 text-white uppercase ${getTracking("tracking-[0.2em]", "tracking-wide")}`}>{t.wait}</h2>
+              <p className={`text-xs text-white/40 font-light leading-relaxed mb-8 ${getTracking("tracking-widest", "tracking-normal")}`}>
+                {t.areYouSureExit}
+              </p>
+ 
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => {
+                      if ((window as any)?.Capacitor?.Plugins?.App) {
+                          (window as any).Capacitor.Plugins.App.exitApp();
+                      } else {
+                         setShowExitConfirm(false);
+                      }
+                  }}
+                  className={`w-full py-4 bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                >
+                  {t.exitApp}
+                </button>
+                <button
+                  onClick={() => setShowExitConfirm(false)}
+                  className={`w-full py-4 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                >
+                  {t.keepPlaying}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showRecoveryModal && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className={`absolute inset-0 z-[100] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/90 backdrop-blur-lg'} flex flex-col items-center justify-center p-6`}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
+              className="bg-[#050505] rounded-[2.5rem] w-full max-w-[320px] p-8 shadow-2xl border border-white/5 text-center"
+            >
+              <div className="w-16 h-16 bg-[#A2D2FF]/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <RotateCcw size={32} className="text-[#A2D2FF]" />
+              </div>
+              <h2 className="text-xl font-light tracking-[0.2em] mb-3 uppercase">{t.welcomeBack}</h2>
+              <p 
+                className="text-xs text-white/40 font-light tracking-widest leading-relaxed mb-8"
+                dangerouslySetInnerHTML={{ __html: t.recoveryText }}
+              />
 
-      {/* Game Over Modal */}
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={loadSavedGame}
+                  className={`w-full py-4 bg-white text-black rounded-2xl text-xs uppercase font-light transition-transform active:scale-95 shadow-xl ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                >
+                  {t.continueGame}
+                </button>
+                <button
+                  onClick={discardSavedGame}
+                  className={`w-full py-4 bg-white/5 hover:bg-white/10 text-white/60 rounded-2xl text-xs uppercase font-light transition-colors border border-white/5 ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                >
+                  {t.startNew}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {gameOver && gameOverStats && (
           <motion.div
@@ -3141,7 +3430,7 @@ export default function App() {
                className="mt-8 text-center"
             >
                <h1 className={`text-xl md:text-2xl font-black text-[#6366F1] uppercase [text-shadow:0_0_15px_rgba(99,102,241,0.5)] ${getTracking("tracking-[0.3em]", "tracking-wider")}`}>
-                 {t.evolutionHalted}
+                 {gameOverStats.isVictory ? t.challengeWin : (gameMode === 'moveLimit' && movesLeft <= 0) ? t.outOfMoves : t.evolutionHalted}
                </h1>
             </motion.div>
 
@@ -3158,7 +3447,7 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 1 }}
-                      className={`absolute -top-6 bg-[#FFE082]/10 border border-[#FFE082]/30 text-[#FFE082] px-4 py-1 text-[10px] sm:text-xs font-bold rounded-full uppercase shadow-[0_0_20px_rgba(255,224,130,0.3)] whitespace-nowrap ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                      className={`relative mb-4 bg-[#FFE082]/10 border border-[#FFE082]/30 text-[#FFE082] px-4 py-1 text-[10px] sm:text-xs font-bold rounded-full uppercase shadow-[0_0_20px_rgba(255,224,130,0.3)] whitespace-nowrap ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                     >
                       {t.newRecord}
                     </motion.div>
@@ -3176,28 +3465,30 @@ export default function App() {
                  initial={{ y: 20, opacity: 0 }}
                  animate={{ y: 0, opacity: 1 }}
                  transition={{ delay: 0.6, duration: 0.6 }}
-                 className="grid grid-cols-2 gap-4 w-full px-2"
+                 className="grid grid-cols-2 gap-2.5 sm:gap-4 w-full px-2"
                >
-                  <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
+                  <div className="bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
                      <span className="text-[10px] tracking-widest text-[#FFE082]/70 uppercase">{t.largestBlock}</span>
                      <span className="text-xl font-light text-white">{gameOverStats.maxBlock}</span>
                   </div>
-                  <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
+                  <div className="bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
                      <span className="text-[10px] tracking-widest text-white/40 uppercase">{t.totalMoves}</span>
                      <span className="text-xl font-light text-white">{gameOverStats.finalMoves}</span>
                   </div>
-                  <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
+                  <div className="bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
                      <span className="text-[10px] tracking-widest text-white/40 uppercase">{t.efficiency}</span>
                      <span className="text-xl font-light text-white">{gameOverStats.finalMoves > 0 ? (score / gameOverStats.finalMoves).toFixed(1) : 0}</span>
                   </div>
-                  <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
+                  <div className="bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
                      <span className="text-[10px] tracking-widest text-white/40 uppercase">{t.longestCombo}</span>
                      <span className="text-xl font-light text-white tracking-wider">{gameOverStats.longestCombo}</span>
                   </div>
-                  <div className="col-span-2 bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-[#6366F1]/70 uppercase">{t.evolutionLevel}</span>
-                     <span className="text-xl font-light text-white">{gameOverStats.finalLevel}</span>
-                  </div>
+                  {gameMode !== 'moveLimit' && (
+                      <div className="col-span-2 bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
+                         <span className="text-[10px] tracking-widest text-[#6366F1]/70 uppercase">{t.evolutionLevel}</span>
+                         <span className="text-xl font-light text-white">{gameOverStats.finalLevel}</span>
+                      </div>
+                  )}
                </motion.div>
             </div>
 
@@ -3208,12 +3499,49 @@ export default function App() {
                transition={{ delay: 0.8, duration: 0.6 }}
                className="w-full max-w-md flex flex-col gap-4 mt-8 mb-4"
             >
+               {gameOverStats?.isVictory && challengeLevel < 105 && gameMode === 'moveLimit' ? (
+                 <button 
+                    onClick={() => {
+                      const nextLvl = challengeLevel + 1;
+                      setChallengeLevel(nextLvl);
+                      challengeLevelRef.current = nextLvl;
+                      setGameOver(false);
+                      setGameOverStats(null);
+                      initializeGame('moveLimit', nextLvl);
+                    }} 
+                    className={`w-full py-4 bg-teal-500 text-black hover:bg-teal-400 rounded-2xl text-xs sm:text-sm font-medium uppercase transition-all shadow-[0_0_20px_rgba(45,212,191,0.3)] flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                 >
+                    {t.nextStage}
+                 </button>
+               ) : (
+                 <button 
+                    onClick={() => initializeGame(gameMode || undefined, challengeLevel)} 
+                    className={`w-full py-4 bg-white text-black hover:bg-white/90 rounded-2xl text-xs sm:text-sm font-light uppercase transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                 >
+                    <RotateCcw size={18} strokeWidth={1.5} /> {t.retry}
+                 </button>
+               )}
                <button 
-                  onClick={initializeGame} 
-                  className={`w-full py-4 bg-white text-black hover:bg-white/90 rounded-2xl text-xs sm:text-sm font-light uppercase transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                   onClick={() => {
+                     setGameOver(false);
+                     setGameOverStats(null);
+                     setTiles([]);
+                     setMovesLeft(80); // KRİTİK TAMİR: Kalan hamle tuzağını sıfırlayarak sonsuz döngü kalkanını kır!
+                     if (gameMode === 'moveLimit') {
+                       setIsViewingChallengeTree(true);
+                     } else {
+                       setGameMode(null);
+                     }
+                   }}
+                  className={`w-full py-4 bg-transparent border border-white/10 text-white/80 hover:text-white hover:bg-white/5 rounded-2xl text-xs sm:text-sm font-light uppercase transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                >
-                  <RotateCcw size={18} strokeWidth={1.5} /> {t.retry}
+                  {gameMode === 'moveLimit' ? (
+                     <>🗺️ {t.returnToTree}</>
+                   ) : (
+                     <><Home size={18} strokeWidth={1.5} /> {t.backToMenu}</>
+                   )}
                </button>
+               {gameMode !== 'moveLimit' && (
                <button 
                   onClick={() => {
                      const text = t.shareMessage
@@ -3228,104 +3556,268 @@ export default function App() {
                >
                   <Share2 size={16} strokeWidth={1.5} /> {t.shareResults}
                </button>
+               )}
             </motion.div>
 
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Settings Modal */}
-      <AnimatePresence>
-        {isSettingsOpen && (
-          <motion.div
-             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-             className={`absolute inset-0 z-[60] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/80 backdrop-blur-md'} flex flex-col items-center justify-center p-6`}
+      {/* SCREENS */}
+      {isOutdatedWebView ? (
+        <div className="h-screen w-full flex flex-col items-center justify-center bg-[#121212] font-sans text-white text-center p-8 select-none">
+          <div className="w-16 h-16 bg-pink-500/10 rounded-2xl flex items-center justify-center mb-6 border border-pink-500/30 animate-pulse">
+            <AlertTriangle size={32} className="text-pink-400" />
+          </div>
+          <h2 className="text-xl font-light tracking-[0.2em] mb-4 uppercase">{t.systemUpdateRequired}</h2>
+          <p className="text-xs text-white/60 font-extralight tracking-widest leading-relaxed max-w-xs mb-10">
+            {t.webviewWarningText}
+          </p>
+          <button
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.location.href = "market://details?id=com.google.android.webview";
+              }
+            }}
+            className="py-4 px-8 rounded-2xl bg-white text-black text-xs font-medium tracking-[0.2em] uppercase shadow-lg active:scale-95 transition-transform"
           >
-            <div className="bg-[#050505] rounded-3xl w-full max-w-[320px] p-6 shadow-2xl border border-white/5 relative">
-               <button onClick={() => setIsSettingsOpen(false)} className="absolute top-5 right-5 text-white/40 hover:text-white transition-colors">
-                 <X size={20}/>
-               </button>
-               <h3 className="text-lg font-light tracking-[0.2em] text-center mb-8 mt-2 uppercase">{t.settings}</h3>
-               
-               <div className="flex justify-between items-center mb-6 px-2">
-                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Volume2 size={18}/> {t.sound}</span>
-                  <button onClick={() => setSoundEnabled(!soundEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${soundEnabled ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
-                     <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${soundEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
-                  </button>
-               </div>
-               
-               <div className="flex justify-between items-center mb-8 px-2">
-                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Vibrate size={18}/> {t.haptics}</span>
-                  <button onClick={() => setHapticsEnabled(!hapticsEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${hapticsEnabled ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
-                     <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${hapticsEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
-                  </button>
-               </div>
-
-                <div className="flex justify-between items-center mb-8 px-2">
-                   <span className="font-light tracking-wide opacity-80 flex items-center gap-3">
-                      <Grid size={18} />
-                      {t.language}
-                   </span>
-                   <select
-                      value={currentLang}
-                      onChange={(e) => setCurrentLang(e.target.value)}
-                      className="bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs font-light tracking-wide text-white/80 focus:outline-none focus:ring-1 focus:ring-[#06B6D4] cursor-pointer"
-                   >
-                      <option value="en" className="bg-[#050505] text-white">English</option>
-                      <option value="tr" className="bg-[#050505] text-white">Türkçe</option>
-                      <option value="de" className="bg-[#050505] text-white">Deutsch</option>
-                      <option value="pl" className="bg-[#050505] text-white">Polski</option>
-                      <option value="es" className="bg-[#050505] text-white">Español</option>
-                      <option value="fr" className="bg-[#050505] text-white">Français</option>
-                      <option value="ru" className="bg-[#050505] text-white">Русский</option>
-                      <option value="it" className="bg-[#050505] text-white">Italiano</option>
-                      <option value="ko" className="bg-[#050505] text-white">한국어</option>
-                      <option value="ja" className="bg-[#050505] text-white">日本語</option>
-                      <option value="zh" className="bg-[#050505] text-white">简体中文</option>
-                      <option value="ar" className="bg-[#050505] text-white">العربية</option>
-                   </select>
-                </div>
-
-               <div className="flex justify-between items-center mb-8 px-2">
-                   <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Zap size={18}/> {t.reduceEffects}</span>
-                   <button onClick={() => setLowPerformanceMode(!lowPerformanceMode)} className={`w-12 h-6 rounded-full relative transition-colors ${lowPerformanceMode ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
-                      <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${lowPerformanceMode ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
-                   </button>
-                </div>
-
-               <div className="border-t border-white/5 pt-6 mt-2 flex flex-col gap-3">
-                  <button 
-                     onClick={() => {
-                        setIsSettingsOpen(false);
-                        setShowInfoModal(true);
-                        setInfoStep(1);
-                     }}
-                     className={`w-full py-3.5 rounded-xl bg-white/5 text-white/90 font-light text-xs hover:bg-white/10 transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}
-                  >
-                     {t.howToPlay}
-                  </button>
-                  {!showResetConfirm ? (
-                     <button onClick={() => setShowResetConfirm(true)} className={`w-full py-3.5 rounded-xl bg-red-500/10 text-red-400 font-light text-xs hover:bg-red-500/20 transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}>{t.resetProgress}</button>
-                  ) : (
-                     <div className="flex flex-col gap-3">
-                         <span className="text-center text-xs text-red-400 font-light tracking-widest flex items-center justify-center gap-2">
-                           <AlertTriangle size={14} /> {t.areYouSure}
-                         </span>
-                         <div className="flex gap-3">
-                             <button onClick={handleHardReset} className={`flex-1 py-3 rounded-xl bg-red-500/80 hover:bg-red-500 text-white font-light text-xs transition-colors ${getTracking("tracking-widest", "tracking-normal")}`}>{t.yes}</button>
-                             <button onClick={() => setShowResetConfirm(false)} className={`flex-1 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white/80 font-light text-xs transition-colors ${getTracking("tracking-widest", "tracking-normal")}`}>{t.no}</button>
-                         </div>
-                     </div>
-                  )}
-               </div>
+            🚀 {t.updateWebviewBtn}
+          </button>
+        </div>
+      ) : !appReady ? (
+<div className="h-screen w-full flex flex-col items-center justify-center bg-[#1E1E1E] font-sans text-white select-none">
+        {/* Pulsing diamond outline */}
+        <motion.div
+          animate={{ opacity: [0.3, 0.8, 0.3], scale: [0.95, 1.05, 0.95] }}
+          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          className="mb-10"
+        >
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="12" y="12" width="40" height="40" rx="8" stroke="rgba(168,162,158,0.5)" strokeWidth="1.5" transform="rotate(45 32 32)" fill="none" />
+            <rect x="20" y="20" width="24" height="24" rx="4" stroke="rgba(168,162,158,0.3)" strokeWidth="1" transform="rotate(45 32 32)" fill="none" />
+          </svg>
+        </motion.div>
+        <motion.p
+          animate={{ opacity: [0.4, 0.9, 0.4] }}
+          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          className="text-[10px] font-light tracking-[0.35em] uppercase text-white/50"
+        >
+          {t.loadingText}
+        </motion.p>
+      </div>
+      ) : gameMode === null ? (
+<div className={`h-screen w-full flex flex-col items-center justify-center font-sans select-none relative overflow-hidden ${lowPerformanceMode ? 'bg-[#1E1E1E]' : 'bg-[#121212]'}`}>
+               <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, ease: "easeOut" }}
+            className="flex flex-col items-center z-10"
+         >
+            <h1 className="text-4xl sm:text-5xl font-light mb-2 tracking-widest text-white [text-shadow:0_0_20px_rgba(255,255,255,0.2)] text-center">GRID<br/>EVOLUTION</h1>
+            <p className="text-white/60 text-xs sm:text-sm uppercase tracking-[0.3em] mb-16">{t.selectMode}</p>
+            
+            <div className="flex flex-col gap-6 w-72">
+              <motion.button
+                 whileHover={{ scale: 1.05 }}
+                 whileTap={{ scale: 0.95 }}
+                 onClick={() => {
+                   setGameMode('classic');
+                   const save = localStorage.getItem('grid-evo-session-classic');
+                   if (save) {
+                     setSavedGameData(JSON.parse(save));
+                     setShowRecoveryModal(true);
+                   } else {
+                     initializeGame('classic');
+                   }
+                 }}
+                 className="py-5 px-6 rounded-3xl bg-white/5 border border-white/10 text-white font-medium tracking-widest backdrop-blur-md hover:bg-white/10 hover:border-teal-300/50 transition-colors shadow-[0_0_15px_rgba(45,212,191,0.05)] hover:shadow-[0_0_25px_rgba(45,212,191,0.2)] uppercase text-sm"
+              >
+                 {t.classicMode}
+              </motion.button>
+              <motion.button
+                 whileHover={{ scale: 1.05 }}
+                 whileTap={{ scale: 0.95 }}
+                 onClick={() => {
+                   setGameMode('moveLimit');
+                   setIsViewingChallengeTree(true);
+                 }}
+                 className="py-5 px-6 rounded-3xl bg-gradient-to-br from-pink-500/10 to-purple-500/10 border border-pink-500/30 text-white font-medium tracking-widest backdrop-blur-md hover:bg-pink-500/20 hover:border-pink-400/60 transition-colors shadow-[0_0_20px_rgba(236,72,153,0.15)] hover:shadow-[0_0_30px_rgba(236,72,153,0.3)] uppercase text-sm"
+              >
+                 {t.challengeMode}
+              </motion.button>
             </div>
-          </motion.div>
+         </motion.div>
+      </div>
+      ) : gameMode === 'moveLimit' && isViewingChallengeTree ? (
+       <div className={`h-screen w-full flex flex-col items-center justify-center bg-[#121212] font-sans select-none relative p-6`}>
+          <button onClick={() => { setGameMode(null); setIsViewingChallengeTree(false); }} className="absolute top-6 left-6 text-white/50 hover:text-white flex items-center gap-2 text-xs uppercase tracking-widest">← {t.backWord}</button>
+          
+          <h2 className="text-2xl font-light tracking-[0.2em] mb-2 text-center uppercase">{t.challengeMode}</h2>
+          <p className="text-pink-400 text-[10px] uppercase tracking-[0.3em] mb-12">{t.selectStage}</p>
+          
+          <div className="grid grid-cols-5 gap-4 max-h-[60vh] overflow-y-auto px-4 py-2 Mask-Scrollbar">
+             {CHALLENGE_LEVELS.map(cfg => {
+                const lvl = cfg.level;
+                const isUnlocked = lvl <= maxUnlockedLevel;
+                const isActiveNode = lvl === maxUnlockedLevel;
+                const save = localStorage.getItem('grid-evo-session-challenge');
+                let hasSaveForThisLevel = false;
+                if (save) {
+                    try {
+                        const parsed = JSON.parse(save);
+                        if (parsed.challengeLevel === lvl) hasSaveForThisLevel = true;
+                    } catch(e) {}
+                }
+                
+                return (
+                   <div key={`node-container-${lvl}`} className="flex flex-col items-center gap-4 relative pt-10">
+                       {hasSaveForThisLevel && (
+                           <motion.button
+                               initial={{ opacity: 0, y: 10 }}
+                               animate={{ opacity: 1, y: 0, scale: [1, 1.05, 1] }}
+                               transition={{ scale: { repeat: Infinity, duration: 2 } }}
+                               onClick={() => {
+                                   const data = JSON.parse(save!);
+                                   setTiles(data.tiles);
+                                   setScore(data.score);
+                                   setMoves(data.moves);
+                                   setGridSize(data.gridSize || 4);
+                                   setMaxBlock(data.maxBlock || 2);
+                                   setPowerUps(data.powerUps);
+                                   setHistory(data.history || []);
+                                   setMovesLeft(data.movesLeft !== undefined ? data.movesLeft : cfg.moves);
+                                   setChallengeLevel(lvl);
+                                   challengeLevelRef.current = lvl;
+                                   setIsViewingChallengeTree(false);
+                               }}
+                               className="absolute top-0 whitespace-nowrap bg-pink-500/20 text-pink-300 border border-pink-500/50 text-[9px] tracking-widest px-3 py-1.5 rounded-full uppercase z-10 animate-pulse"
+                           >
+                               [ {t.resumeWord} ]
+                           </motion.button>
+                       )}
+                       <motion.button
+                          key={`node-${lvl}`}
+                          disabled={!isUnlocked}
+                          whileHover={isUnlocked ? { scale: 1.05 } : {}}
+                          animate={isActiveNode ? {
+                             scale: [1, 1.06, 1],
+                             borderColor: ["#a855f7", "#ec4899", "#a855f7"],
+                             boxShadow: [
+                                "0 0 12px rgba(168,85,247,0.5)",
+                                "0 0 25px rgba(236,72,153,0.8)",
+                                "0 0 12px rgba(168,85,247,0.5)"
+                             ]
+                          } : {}}
+                          transition={isActiveNode ? {
+                             repeat: Infinity,
+                             duration: 1.8,
+                             ease: "easeInOut"
+                          } : {}}
+                          onClick={() => {
+                             setChallengeLevel(lvl);
+                             challengeLevelRef.current = lvl;
+                             setIsViewingChallengeTree(false);
+                             initializeGame('moveLimit', lvl);
+                          }}
+                          className={`w-16 h-16 rounded-full flex flex-col items-center justify-center border-2 transition-all relative
+                             ${isActiveNode ? 'bg-gradient-to-br from-purple-600/20 to-pink-600/20 text-white font-bold' : 
+                               isUnlocked ? 'border-purple-500/40 bg-purple-500/5 text-white/80' : 
+                               'border-white/5 bg-white/5 text-white/20 opacity-25 cursor-not-allowed'}`}
+                       >
+                          <span className="text-lg font-light">{lvl}</span>
+                       </motion.button>
+                    </div>
+                 );
+              })}
+           </div>
+        </div>
+      ) : (
+<motion.div
+      dir={currentLang === 'ar' ? 'rtl' : 'ltr'}
+      animate={{ backgroundColor: getBackgroundColor(gridSize) }}
+      transition={{ duration: 0.8, ease: "easeOut" }}
+      className="h-screen w-full flex flex-col items-center font-sans text-white overflow-hidden relative overscroll-none select-none"
+      style={{
+          paddingTop: '1.5rem',
+          paddingBottom: '1.5rem'
+      }}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onMouseDown={onTouchStart}
+      onMouseMove={onTouchMove}
+      onMouseUp={onTouchEnd}
+      onMouseLeave={onTouchEnd}
+    >
+      <div className="mobile-landscape-warning absolute inset-0 z-[200] hidden bg-[#121212] items-center justify-center flex-col text-center p-6 h-screen">
+          <AlertTriangle size={48} className="text-[#6366F1] mb-6"/>
+          <h2 className="text-xl font-light tracking-[0.2em] mb-3 uppercase">{t.rotateDevice}</h2>
+          <p className="text-sm text-white/60 font-light tracking-widest leading-relaxed max-w-sm">
+             {t.warningText}
+          </p>
+      </div>
+
+      {/* Exit Confirmation Modal */}
+      
+
+      {/* Game Recovery Modal */}
+      
+      {/* Confetti Overflow */}
+      {isAppVisible && confetti > 0 && (
+        <div className="fixed inset-0 pointer-events-none z-[100] overflow-hidden">
+           {Array.from({ length: 40 }).map((_, i) => (
+             <div 
+               key={`${confetti}-${i}`} 
+               className="confetti absolute top-[-20px] w-2 h-4 rounded-sm" 
+               style={{ 
+                  left: `${Math.random() * 100}%`, 
+                  backgroundColor: ['#D7CCC8', '#DCEDC8', '#B2EBF2', '#F8BBD0', '#FFE082'][Math.floor(Math.random()*5)],
+                  animationDuration: `${2 + Math.random() * 2}s`,
+                  animationDelay: `${Math.random() * 0.5}s`
+               }} 
+             />
+           ))}
+        </div>
+      )}
+
+      <AnimatePresence>
+        {flashActive && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0.15, transition: { duration: 0.05 } }}
+            exit={{ opacity: 0, transition: { duration: 0.5, ease: 'easeOut' } }}
+            className="fixed inset-0 z-0 pointer-events-none bg-[#6366F1] block"
+          />
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {hexaGlow && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 1 }}
+            className="fixed inset-0 z-[100] pointer-events-none mix-blend-screen"
+            style={{
+              background: 'radial-gradient(circle at center, transparent 0%, rgba(255, 215, 0, 0.15) 100%)'
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Info Modal */}
+      
+
+      {/* Game Over Modal */}
+      
+
+      {/* Settings Modal */}
+      
+
       <div className="flex flex-col w-full h-full max-w-[500px]">
         <div className="flex flex-col w-full px-4 pt-2 pb-2 shrink-0 z-20">
-            <Header score={score} highScore={highScore} scoreMultiplier={scoreMultiplier} onOpenSettings={() => setIsSettingsOpen(true)} t={t} />
+            <Header score={score} highScore={highScore} scoreMultiplier={scoreMultiplier} onOpenSettings={handleOpenSettings} t={t} gameMode={gameMode} movesLeft={movesLeft} maxBlock={maxBlock} gameOver={gameOver} challengeLevel={challengeLevel} currentTarget={gameMode === 'moveLimit' ? (CHALLENGE_LEVELS[challengeLevel - 1]?.target || 1024) : 2048} />
             <LevelBar progress={levelInfo.xp / levelInfo.requiredXp} flash={flashBar} />
 
             {/* Combo Message (Relocated between Level Bar and Controls) */}
@@ -3368,7 +3860,7 @@ export default function App() {
             />
         </div>
 
-        <div className="flex-1 w-full flex items-center justify-center px-4 relative z-10 shrink min-h-0 pb-20 sm:pb-24">
+        <div className="flex-1 w-full flex items-center justify-center px-4 relative z-10 shrink min-h-0 pb-14 sm:pb-24">
           <AnimatePresence>
             {comboMessage && comboMessage.count && comboMessage.count >= 2 && (
                <motion.div
@@ -3410,7 +3902,7 @@ export default function App() {
                 (levelUpTrigger > 0 ? { scale: [1, 1.05, 1] } : { scale: 1 })}
             transition={{ duration: shake ? 0.4 : 0.6, ease: "easeInOut" }}
             className={`relative w-full aspect-square bg-[#1E1E1E] rounded-[2.5rem] p-3 touch-none overflow-hidden transition-colors duration-700 ${(!isIdle && isAppVisible && movesWithoutMerge >= entropyLimit - 1) ? (lowPerformanceMode ? 'border border-[#F87171]/30' : 'shadow-[0_0_60px_rgba(248,113,113,0.3)] border border-[#F87171]/30') : (!isIdle && isAppVisible && movesWithoutMerge >= entropyLimit - 2) ? (lowPerformanceMode ? 'border border-[#F87171]/10' : 'shadow-[0_0_40px_rgba(248,113,113,0.15)] border border-[#F87171]/10') : (lowPerformanceMode ? 'border border-white/5' : 'shadow-2xl border border-white/5')}`}
-            style={{ maxWidth: 'min(100%, 60vh)' }}
+            style={{ maxWidth: 'min(100%, calc(100vh - 300px))' }}
           >
             {(!isIdle && isAppVisible && movesWithoutMerge >= entropyLimit - 2) && !lowPerformanceMode && (
                 <div 
@@ -3449,20 +3941,10 @@ export default function App() {
                     isHammerActive={isHammerActive}
                     onClick={executeClear}
                     lowPerformanceMode={lowPerformanceMode}
+                    gameOver={gameOver}
                   />
                 ))}
-                {ghostTiles.map(tile => (
-                  <TileComponent
-                    key={tile.id}
-                    tile={tile}
-                    gridSize={gridSize}
-                    tileSizePercent={tileSizePercent}
-                    levelUpTrigger={levelUpTrigger}
-                    isHammerActive={isHammerActive}
-                    onClick={executeClear}
-                    lowPerformanceMode={lowPerformanceMode}
-                  />
-                ))}
+                {/* ghostTiles mapping removed to fix TS compilation errors */}
               </AnimatePresence>
             </div>
             {/* VFX Layer added with pointer-events-none */}
@@ -3473,5 +3955,52 @@ export default function App() {
         </div>
       </div>
     </motion.div>
+      )}
+      <AnimatePresence>
+        {showRateModal && (
+          <motion.div
+             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+             className="fixed inset-0 z-[300] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6"
+          >
+             <motion.div
+                initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
+                className="bg-[#050505] rounded-[2.5rem] w-full max-w-[320px] p-8 shadow-2xl border border-white/5 text-center relative"
+             >
+                <div className="w-16 h-16 bg-[#FFE082]/10 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#FFE082]/20">
+                   <span className="text-2xl animate-pulse">⭐️</span>
+                </div>
+                <h2 className={`text-lg font-light mb-3 text-white uppercase ${getTracking("tracking-[0.2em]", "tracking-wide")}`}>{t.rateTitle}</h2>
+                <p className="text-xs text-white/50 font-extralight leading-relaxed mb-8 px-2">
+                   {t.rateDesc}
+                </p>
+                <div className="flex flex-col gap-3">
+                   <button
+                      onClick={() => {
+                         localStorage.setItem('grid-evo-already-rated', 'true');
+                         setShowRateModal(false);
+                         if (typeof window !== 'undefined') {
+                            window.location.href = "market://details?id=com.dinzdp.gridevolution";
+                         }
+                      }}
+                      className={`w-full py-4 bg-gradient-to-r from-purple-600/30 to-pink-600/30 text-white border border-pink-500/30 hover:border-pink-500/60 rounded-2xl text-xs uppercase font-medium transition-all shadow-[0_0_15px_rgba(236,72,153,0.2)] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                   >
+                      🚀 {t.rateBtn}
+                   </button>
+                   <button
+                      onClick={() => {
+                         localStorage.setItem('grid-evo-already-rated', 'true');
+                         setShowRateModal(false);
+                      }}
+                      className={`w-full py-4 bg-white/5 text-white/40 hover:text-white/60 rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                   >
+                      {t.rateLater}
+                   </button>
+                </div>
+             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
+
 }
