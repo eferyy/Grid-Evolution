@@ -7,6 +7,9 @@ import React, { useState, useEffect, useCallback, useRef, memo, useMemo } from '
 import { RotateCcw, Undo2, Hammer, Shuffle, Share2, Hand, Settings as SettingsIcon, X, Volume2, Vibrate, AlertTriangle, Snowflake, Grid, Zap, Home } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
+import html2canvas from 'html2canvas';
+import { Share } from '@capacitor/share';
+import { Filesystem, Directory } from '@capacitor/filesystem';
 
 // --- Types ---
 type TileConfig = {
@@ -38,6 +41,7 @@ interface GameHistory {
   score: number;
   gridSize: number;
   moves: number;
+  movesLeft: number;
 }
 
 // --- Constants & Helpers ---
@@ -125,6 +129,22 @@ const safeClamp = (min: string, preferred: string, max: string): string => {
   } catch (_e) { /* CSS.supports not available */ }
   return preferred;
 };
+
+// Android WebView reports env(safe-area-inset-*) as 0 in most configurations;
+// Capacitor 8's SystemBars plugin injects the real values as --safe-area-inset-*
+// custom properties instead. Chain both so every platform resolves correctly.
+const SAFE_INSET_SUPPORTED = (() => {
+  try {
+    return typeof CSS !== 'undefined' && !!CSS.supports && CSS.supports('padding-top', 'env(safe-area-inset-top, 0px)');
+  } catch (_e) { return false; }
+})();
+const safeInset = (side: 'top' | 'right' | 'bottom' | 'left'): string =>
+  SAFE_INSET_SUPPORTED ? `var(--safe-area-inset-${side}, env(safe-area-inset-${side}, 0px))` : '0px';
+const SAFE_TOP = safeInset('top');
+const SAFE_BOTTOM = safeInset('bottom');
+// Full height minus both insets — replaces raw 100vh on top-level screens so
+// bottom-anchored content never slides under the gesture/navigation bar.
+const SAFE_SCREEN_HEIGHT = SAFE_INSET_SUPPORTED ? `calc(100vh - ${SAFE_TOP} - ${SAFE_BOTTOM})` : undefined;
 
 const TRANSLATIONS: Record<string, any> = {
   en: {
@@ -1129,17 +1149,6 @@ const TileComponent = memo(({
   const activeShadow = tile.hasMoved ? 'none' : boxShadow;
 
   const backgroundStyles = useMemo(() => {
-    if (lowPerformanceMode) {
-      return {
-        backgroundColor: '#050505',
-        color: tile.isVoid ? '#A855F7' : style.text,
-        border: '2px solid rgba(168, 85, 247, 0.8)',
-        boxShadow: 'none',
-        mixBlendMode: 'normal' as const,
-        backgroundImage: 'none'
-      };
-    }
-    
     const base: React.CSSProperties = {
         backgroundColor: tile.isVoid ? 'transparent' : style.bg,
         color: tile.isVoid ? '#E5E7EB' : style.text,
@@ -1371,10 +1380,11 @@ const Controls = memo(({ undoCount, canUndo, hammerCharge, shuffleCount, onUndo,
     <div className="flex gap-4 items-center">
       <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
         onClick={onUndo} disabled={undoCount === 0 || !canUndo}
+        aria-label="Undo Move"
         className="text-white/40 hover:text-white disabled:opacity-20 w-11 h-11 bg-white/[0.06] border border-white/[0.08] rounded-xl flex items-center justify-center relative"
         style={{ transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}
       >
-        <Undo2 size={20} strokeWidth={1.5} />
+        <Undo2 size={20} strokeWidth={1.5} aria-hidden="true" />
         {undoCount > 0 && (
           <span 
             className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-white text-black font-light text-[8px] border border-white/20 flex items-center justify-center shadow-lg"
@@ -1385,6 +1395,7 @@ const Controls = memo(({ undoCount, canUndo, hammerCharge, shuffleCount, onUndo,
       </motion.button>
       <motion.button whileHover={hammerCharge === 100 ? { scale: 1.1 } : {}} whileTap={hammerCharge === 100 ? { scale: 0.9 } : {}}
         onClick={onClear} disabled={hammerCharge < 100}
+        aria-label="Hammer Powerup"
         className={`relative flex flex-col items-center justify-center w-11 h-11 bg-white/[0.06] border border-white/[0.08] rounded-xl overflow-hidden ${
             isHammerActive 
                 ? 'text-[#06B6D4] border-[#06B6D4]/40 [text-shadow:0_0_8px_rgba(6,182,212,0.8)] shadow-[0_0_15px_rgba(6,182,212,0.2)]' 
@@ -1392,17 +1403,18 @@ const Controls = memo(({ undoCount, canUndo, hammerCharge, shuffleCount, onUndo,
         }`}
         style={{ transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}
       >
-        <Hammer size={20} strokeWidth={1.5} className={`${hammerCharge === 100 && !isHammerActive ? 'animate-pulse text-[#06B6D4]' : ''}`} />
+        <Hammer size={20} strokeWidth={1.5} aria-hidden="true" className={`${hammerCharge === 100 && !isHammerActive ? 'animate-pulse text-[#06B6D4]' : ''}`} />
         <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/10 overflow-hidden">
             <div className={`h-full transition-all duration-300 ${hammerCharge === 100 ? 'bg-[#06B6D4] shadow-[0_0_5px_#06B6D4]' : 'bg-[#06B6D4]/50'}`} style={{ width: `${hammerCharge}%` }} />
         </div>
       </motion.button>
       <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
         onClick={onShuffle} disabled={shuffleCount === 0}
+        aria-label="Shuffle Powerup"
         className="text-white/40 hover:text-white disabled:opacity-20 w-11 h-11 bg-white/[0.06] border border-white/[0.08] rounded-xl flex items-center justify-center relative"
         style={{ transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}
       >
-        <Shuffle size={20} strokeWidth={1.5} />
+        <Shuffle size={20} strokeWidth={1.5} aria-hidden="true" />
         {shuffleCount > 0 && (
           <span 
             className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-white text-black font-light text-[8px] border border-white/20 flex items-center justify-center shadow-lg"
@@ -1415,10 +1427,11 @@ const Controls = memo(({ undoCount, canUndo, hammerCharge, shuffleCount, onUndo,
 
     <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
       onClick={onReset}
+      aria-label="Reset Grid"
       className="text-white/40 hover:text-white w-11 h-11 bg-white/[0.06] border border-white/[0.08] rounded-xl flex items-center justify-center relative"
       style={{ transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}
     >
-      <RotateCcw size={20} strokeWidth={1.5} />
+      <RotateCcw size={20} strokeWidth={1.5} aria-hidden="true" />
     </motion.button>
   </div>
 ));
@@ -1588,18 +1601,18 @@ const VFXParticle = ({ fx, tileSizePercent, onComplete }: { fx: VFXParams, tileS
 
 // --- INJECT NEW TRANSLATIONS ---
 const newTranslations: Record<string, any> = {
-  en: { selectMode: "Select Mode", classicMode: "Classic Evolution", movesLeft: "Moves Left", outOfMoves: "Out of Moves!", backToMenu: "Main Menu", targetGoal: "Target", challengeWin: "CHALLENGE COMPLETE!", movesRemaining: "Moves Remaining", nextStage: "NEXT STAGE", rateTitle: "ENJOYING THE GRID?", rateDesc: "Help us evolve! Rate us on the Play Store to support new updates.", rateBtn: "RATE NOW", rateLater: "MAYBE LATER" },
-  tr: { selectMode: "OYUN MODU", classicMode: "Klasik Evrim", movesLeft: "Kalan Hamle", outOfMoves: "Hamleler Tükendi!", backToMenu: "Ana Menü", targetGoal: "Hedef", challengeWin: "GÖREV BAŞARILI!", movesRemaining: "Hamle Kaldı", nextStage: "SONRAKİ BÖLÜM", rateTitle: "IZGARAYI BEĞENDİN Mİ?", rateDesc: "Evrimleşmemize yardımcı ol! Yeni güncellemeleri desteklemek için bizi Play Store'da puanla.", rateBtn: "PUAN VER", rateLater: "BELKİ DAHA SONRA" },
-  de: { selectMode: "Modus Wählen", classicMode: "Klassische Evolution", movesLeft: "Züge Übrig", outOfMoves: "Keine Züge Mehr!", backToMenu: "Hauptmenü", targetGoal: "Ziel", challengeWin: "HERAUSFORDERUNG ABGESCHLOSSEN!", movesRemaining: "Verbleibende Züge", nextStage: "NÄCHSTE STUFE", rateTitle: "GEFÄLLT DIR DAS FELD?", rateDesc: "Hilf uns zu wachsen! Bewerte uns im Play Store.", rateBtn: "BEWERTEN", rateLater: "SPÄTER" },
-  pl: { selectMode: "Wybierz Tryb", classicMode: "Klasyczna Ewolucja", movesLeft: "Ruchy", outOfMoves: "Koniec Ruchów!", backToMenu: "Menu Główne", targetGoal: "Cel", challengeWin: "WYZWANIE UKOŃCZONE!", movesRemaining: "Pozostałe Ruchy", nextStage: "NASTĘPNY ETAP", rateTitle: "ENJOYING THE GRID?", rateDesc: "Help us evolve! Rate us on the Play Store to support new updates.", rateBtn: "RATE NOW", rateLater: "MAYBE LATER" },
-  es: { selectMode: "Seleccionar Modo", classicMode: "Evolución Clásica", movesLeft: "Movimientos", outOfMoves: "¡Sin Movimientos!", backToMenu: "Menú Principal", targetGoal: "Objetivo", challengeWin: "¡DESAFÍO COMPLETADO!", movesRemaining: "Movimientos Restantes", nextStage: "SIGUIENTE NIVEL", rateTitle: "¿TE GUSTA EL TABLERO?", rateDesc: "¡Ayúdanos a evolucionar! Califícanos en la Play Store.", rateBtn: "CALIFICAR", rateLater: "MÁS TARDE" },
-  fr: { selectMode: "Choisir Mode", classicMode: "Évolution Classique", movesLeft: "Coups Restants", outOfMoves: "Plus de Coups!", backToMenu: "Menu Principal", targetGoal: "Objectif", challengeWin: "DÉFI REUSSI!", movesRemaining: "Mouvements Restants", nextStage: "PROCHAIN NIVEAU", rateTitle: "AIMEZ-VOUS LA GRILLE?", rateDesc: "Aidez-nous à évoluer! Notez-nous sur le Play Store.", rateBtn: "NOTER", rateLater: "PLUS TARD" },
-  ru: { selectMode: "Выбор Режима", classicMode: "Классика", movesLeft: "Осталось Ходов", outOfMoves: "Ходы Закончились!", backToMenu: "Главное Меню", targetGoal: "Цель", challengeWin: "ИСПЫТАНИЕ ЗАВЕРШЕНО!", movesRemaining: "Осталось Ходов", nextStage: "СЛЕДУЮЩИЙ ЭТАП", rateTitle: "НРАВИТСЯ СЕТКА?", rateDesc: "Помогите нам развиваться! Оцените нас в Play Store.", rateBtn: "ОЦЕНИТЬ", rateLater: "ПОЗЖЕ" },
-  it: { selectMode: "Seleziona Modo", classicMode: "Evoluzione Classica", movesLeft: "Mosse Rimaste", outOfMoves: "Mosse Esaurite!", backToMenu: "Menu Principale", targetGoal: "Obiettivo", challengeWin: "SFIDA COMPLETATA!", movesRemaining: "Mosse Rimaste", nextStage: "PROSSIMO LIVELLO", rateTitle: "TI PIACE LA GRIGLIA?", rateDesc: "Aiutaci a evolverci! Valutaci su Play Store.", rateBtn: "VALUTA", rateLater: "PIÙ TARDI" },
-  ko: { selectMode: "모드 선택", classicMode: "클래식 에볼루션", movesLeft: "남은 이동", outOfMoves: "이동 횟수 마감!", backToMenu: "메인 메뉴", targetGoal: "목표", challengeWin: "챌린지 완료!", movesRemaining: "남은 이동 횟수", nextStage: "다음 스테이지", rateTitle: "그리드가 마음에 드시나요?", rateDesc: "우리가 진화할 수 있도록 도와주세요! 플레이 스토어에서 별점을 남겨주세요.", rateBtn: "지금 평가하기", rateLater: "나중에 하기" },
-  ja: { selectMode: "モード選択", classicMode: "クラシック進化", movesLeft: "残り移動", outOfMoves: "移動回数終了！", backToMenu: "メインメニュー", targetGoal: "目標", challengeWin: "チャレンジクリア！", movesRemaining: "残り移動数", nextStage: "次のステージ", rateTitle: "グリッドは楽しいですか？", rateDesc: "進化にご協力ください！Playストアで評価をお願いします。", rateBtn: "評価する", rateLater: "後で" },
-  zh: { selectMode: "选择模式", classicMode: "经典进化", movesLeft: "剩余步数", outOfMoves: "步数已用尽！", backToMenu: "主菜单", targetGoal: "目标", challengeWin: "挑战完成！", movesRemaining: "剩余步数", nextStage: "下一关", rateTitle: "喜欢这个网格吗？", rateDesc: "赞助我们的进化！请在应用商店为我们评分。", rateBtn: "现在评分", rateLater: "稍后再说" },
-  ar: { selectMode: "اختر الوضع", classicMode: "التطور الكلاسيكي", movesLeft: "الحركات المتبقية", outOfMoves: "انتهت الحركات!", backToMenu: "القائمة الرئيسية", targetGoal: "الهدف", challengeWin: "تم اكتمال التحدي!", movesRemaining: "الحركات المتبقية", nextStage: "المرحلة التالية", rateTitle: "هل أعجبتك الشبكة؟", rateDesc: "ساعدنا على التطور! قيمنا على متجر Play لدعم التحديثات الجديدة.", rateBtn: "قيم الآن", rateLater: "ربما لاحقاً" }
+  en: { selectMode: "Select Mode", classicMode: "Classic Evolution", movesLeft: "Moves Left", outOfMoves: "Out of Moves!", backToMenu: "Main Menu", targetGoal: "Target", challengeWin: "CHALLENGE COMPLETE!", movesRemaining: "Moves Remaining", nextStage: "NEXT STAGE", rateTitle: "ENJOYING THE GRID?", rateDesc: "Help us evolve! Rate us on the Play Store to support new updates.", rateBtn: "RATE NOW", rateLater: "MAYBE LATER", restartConfirmTitle: "Restart Game?", restartConfirmText: "Your current progress will be lost." },
+  tr: { selectMode: "OYUN MODU", classicMode: "Klasik Evrim", movesLeft: "Kalan Hamle", outOfMoves: "Hamleler Tükendi!", backToMenu: "Ana Menü", targetGoal: "Hedef", challengeWin: "GÖREV BAŞARILI!", movesRemaining: "Hamle Kaldı", nextStage: "SONRAKİ BÖLÜM", rateTitle: "IZGARAYI BEĞENDİN Mİ?", rateDesc: "Evrimleşmemize yardımcı ol! Yeni güncellemeleri desteklemek için bizi Play Store'da puanla.", rateBtn: "PUAN VER", rateLater: "BELKİ DAHA SONRA", restartConfirmTitle: "Baştan mı Başlansın?", restartConfirmText: "Mevcut ilerlemeniz kaybolacak." },
+  de: { selectMode: "Modus Wählen", classicMode: "Klassische Evolution", movesLeft: "Züge Übrig", outOfMoves: "Keine Züge Mehr!", backToMenu: "Hauptmenü", targetGoal: "Ziel", challengeWin: "HERAUSFORDERUNG ABGESCHLOSSEN!", movesRemaining: "Verbleibende Züge", nextStage: "NÄCHSTE STUFE", rateTitle: "GEFÄLLT DIR DAS FELD?", rateDesc: "Hilf uns zu wachsen! Bewerte uns im Play Store.", rateBtn: "BEWERTEN", rateLater: "SPÄTER", restartConfirmTitle: "Spiel neu starten?", restartConfirmText: "Dein aktueller Fortschritt geht verloren." },
+  pl: { selectMode: "Wybierz Tryb", classicMode: "Klasyczna Ewolucja", movesLeft: "Ruchy", outOfMoves: "Koniec Ruchów!", backToMenu: "Menu Główne", targetGoal: "Cel", challengeWin: "WYZWANIE UKOŃCZONE!", movesRemaining: "Pozostałe Ruchy", nextStage: "NASTĘPNY ETAP", rateTitle: "ENJOYING THE GRID?", rateDesc: "Help us evolve! Rate us on the Play Store to support new updates.", rateBtn: "RATE NOW", rateLater: "MAYBE LATER", restartConfirmTitle: "Zrestartować grę?", restartConfirmText: "Twój obecny postęp zostanie utracony." },
+  es: { selectMode: "Seleccionar Modo", classicMode: "Evolución Clásica", movesLeft: "Movimientos", outOfMoves: "¡Sin Movimientos!", backToMenu: "Menú Principal", targetGoal: "Objetivo", challengeWin: "¡DESAFÍO COMPLETADO!", movesRemaining: "Movimientos Restantes", nextStage: "SIGUIENTE NIVEL", rateTitle: "¿TE GUSTA EL TABLERO?", rateDesc: "¡Ayúdanos a evolucionar! Califícanos en la Play Store.", rateBtn: "CALIFICAR", rateLater: "MÁS TARDE", restartConfirmTitle: "¿Reiniciar partida?", restartConfirmText: "Se perderá tu progreso actual." },
+  fr: { selectMode: "Choisir Mode", classicMode: "Évolution Classique", movesLeft: "Coups Restants", outOfMoves: "Plus de Coups!", backToMenu: "Menu Principal", targetGoal: "Objectif", challengeWin: "DÉFI REUSSI!", movesRemaining: "Mouvements Restants", nextStage: "PROCHAIN NIVEAU", rateTitle: "AIMEZ-VOUS LA GRILLE?", rateDesc: "Aidez-nous à évoluer! Notez-nous sur le Play Store.", rateBtn: "NOTER", rateLater: "PLUS TARD", restartConfirmTitle: "Recommencer la partie ?", restartConfirmText: "Votre progression actuelle sera perdue." },
+  ru: { selectMode: "Выбор Режима", classicMode: "Классика", movesLeft: "Осталось Ходов", outOfMoves: "Ходы Закончились!", backToMenu: "Главное Меню", targetGoal: "Цель", challengeWin: "ИСПЫТАНИЕ ЗАВЕРШЕНО!", movesRemaining: "Осталось Ходов", nextStage: "СЛЕДУЮЩИЙ ЭТАП", rateTitle: "НРАВИТСЯ СЕТКА?", rateDesc: "Помогите нам развиваться! Оцените нас в Play Store.", rateBtn: "ОЦЕНИТЬ", rateLater: "ПОЗЖЕ", restartConfirmTitle: "Перезапустить игру?", restartConfirmText: "Ваш текущий прогресс будет потерян." },
+  it: { selectMode: "Seleziona Modo", classicMode: "Evoluzione Classica", movesLeft: "Mosse Rimaste", outOfMoves: "Mosse Esaurite!", backToMenu: "Menu Principale", targetGoal: "Obiettivo", challengeWin: "SFIDA COMPLETATA!", movesRemaining: "Mosse Rimaste", nextStage: "PROSSIMO LIVELLO", rateTitle: "TI PIACE LA GRIGLIA?", rateDesc: "Aiutaci a evolverci! Valutaci su Play Store.", rateBtn: "VALUTA", rateLater: "PIÙ TARDI", restartConfirmTitle: "Riavviare la partita?", restartConfirmText: "I tuoi progressi attuali andranno persi." },
+  ko: { selectMode: "모드 선택", classicMode: "클래식 에볼루션", movesLeft: "남은 이동", outOfMoves: "이동 횟수 마감!", backToMenu: "메인 메뉴", targetGoal: "목표", challengeWin: "챌린지 완료!", movesRemaining: "남은 이동 횟수", nextStage: "다음 스테이지", rateTitle: "그리드가 마음에 드시나요?", rateDesc: "우리가 진화할 수 있도록 도와주세요! 플레이 스토어에서 별점을 남겨주세요.", rateBtn: "지금 평가하기", rateLater: "나중에 하기", restartConfirmTitle: "게임을 다시 시작할까요?", restartConfirmText: "현재 진행 상황이 사라집니다." },
+  ja: { selectMode: "モード選択", classicMode: "クラシック進化", movesLeft: "残り移動", outOfMoves: "移動回数終了！", backToMenu: "メインメニュー", targetGoal: "目標", challengeWin: "チャレンジクリア！", movesRemaining: "残り移動数", nextStage: "次のステージ", rateTitle: "グリッドは楽しいですか？", rateDesc: "進化にご協力ください！Playストアで評価をお願いします。", rateBtn: "評価する", rateLater: "後で", restartConfirmTitle: "ゲームをリスタートしますか？", restartConfirmText: "現在の進行状況は失われます。" },
+  zh: { selectMode: "选择模式", classicMode: "经典进化", movesLeft: "剩余步数", outOfMoves: "步数已用尽！", backToMenu: "主菜单", targetGoal: "目标", challengeWin: "挑战完成！", movesRemaining: "剩余步数", nextStage: "下一关", rateTitle: "喜欢这个网格吗？", rateDesc: "赞助我们的进化！请在应用商店为我们评分。", rateBtn: "现在评分", rateLater: "稍后再说", restartConfirmTitle: "重新开始游戏？", restartConfirmText: "当前进度将会丢失。" },
+  ar: { selectMode: "اختر الوضع", classicMode: "التطور الكلاسيكي", movesLeft: "الحركات المتبقية", outOfMoves: "انتهت الحركات!", backToMenu: "القائمة الرئيسية", targetGoal: "الهدف", challengeWin: "تم اكتمال التحدي!", movesRemaining: "الحركات المتبقية", nextStage: "المرحلة التالية", rateTitle: "هل أعجبتك الشبكة؟", rateDesc: "ساعدنا على التطور! قيمنا على متجر Play لدعم التحديثات الجديدة.", rateBtn: "قيم الآن", rateLater: "ربما لاحقاً", restartConfirmTitle: "إعادة بدء اللعبة؟", restartConfirmText: "سيتم فقدان تقدمك الحالي." }
 };
 Object.keys(TRANSLATIONS).forEach(lang => {
   if (newTranslations[lang]) {
@@ -1638,6 +1651,8 @@ export default function App() {
   const challengeLevelRef = useRef<number>(1);
   useEffect(() => { challengeLevelRef.current = challengeLevel; }, [challengeLevel]);
   const [movesLeft, setMovesLeft] = useState<number>(80);
+  const movesLeftRef = useRef<number>(80);
+  useEffect(() => { movesLeftRef.current = movesLeft; }, [movesLeft]);
 
   const handleOpenSettings = useCallback(() => {
     setIsSettingsOpen(true);
@@ -1651,6 +1666,9 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('grid-evo-lang', currentLang);
+    if (typeof document !== 'undefined') {
+       document.documentElement.lang = currentLang;
+    }
   }, [currentLang]);
 
   // Force native system bars to opaque black on Capacitor/Android
@@ -1736,6 +1754,7 @@ export default function App() {
   }, []);
 
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showRestartConfirm, setShowRestartConfirm] = useState(false);
   const [showRecoveryModal, setShowRecoveryModal] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [savedGameData, setSavedGameData] = useState<any>(null);
@@ -1766,6 +1785,7 @@ export default function App() {
   const [levelUpMessage, setLevelUpMessage] = useState<{text: string, id: number} | null>(null);
   const [confetti, setConfetti] = useState(0);
   const vfxRef = useRef<VFXRef>(null);
+  const statsContainerRef = useRef<HTMLDivElement>(null);
   const [hexaGlow, setHexaGlow] = useState(false);
   const [movesWithoutMerge, setMovesWithoutMerge] = useState<number>(0);
   const entropyRef = useRef(0);
@@ -2857,7 +2877,7 @@ export default function App() {
                     setMovesWithoutMerge(0);
                 }
 
-                setHistory(h => [...h, { tiles: prevTiles, score: scoreRef.current, gridSize: gSize, moves: movesRef.current }].slice(-10));
+                setHistory(h => [...h, { tiles: prevTiles, score: scoreRef.current, gridSize: gSize, moves: movesRef.current, movesLeft: movesLeftRef.current }].slice(-10));
                 setMoves(m => m + 1);
                 if (gameModeRef.current === 'moveLimit') {
                   setMovesLeft(prev => Math.max(0, prev - 1));
@@ -2966,9 +2986,6 @@ export default function App() {
     // Fire deferred side effects OUTSIDE setTiles
     const fx = sideEffectsRef.current;
     if (fx) {
-        if (gameModeRef.current === 'moveLimit') {
-            setMovesLeft(prev => Math.max(0, prev - 1));
-        }
         if (fx.voidPops > 0) playVoidPop();
         if (fx.entropyFired) {
             playEntropyPenalty();
@@ -2993,6 +3010,9 @@ export default function App() {
     setTiles(lastState.tiles);
     setScore(lastState.score);
     setMoves(lastState.moves);
+    if (gameModeRef.current === 'moveLimit' && typeof lastState.movesLeft === 'number') {
+      setMovesLeft(lastState.movesLeft);
+    }
     if (gridSize !== lastState.gridSize) {
       setGridSize(lastState.gridSize);
       gridSizeRef.current = lastState.gridSize;
@@ -3048,6 +3068,151 @@ export default function App() {
     });
     setPowerUps(p => ({ ...p, shuffle: p.shuffle - 1 }));
   }, [powerUps.shuffle, gameOver]);
+
+  const handleShareScreenshot = async () => {
+     triggerHaptic(10);
+
+     try {
+        // Canvas API ile elle görsel çiz (html2canvas Android WebView'de çöküyor)
+        const W = 720;
+        const H = 1080;
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { alert('Canvas desteklenmiyor'); return; }
+
+        // Arka plan gradyanı
+        const grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, '#0a0a0a');
+        grad.addColorStop(0.5, '#111111');
+        grad.addColorStop(1, '#050505');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+
+        // Dekoratif üst çizgi
+        const topGrad = ctx.createLinearGradient(0, 0, W, 0);
+        topGrad.addColorStop(0, '#7C3AED');
+        topGrad.addColorStop(1, '#EC4899');
+        ctx.fillStyle = topGrad;
+        ctx.fillRect(0, 0, W, 4);
+
+        // Başlık
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 42px sans-serif';
+        ctx.fillText('GRID EVOLUTION', W / 2, 80);
+
+        // Alt başlık (zafer/yenilgi)
+        const isVictory = gameOverStats?.isVictory;
+        ctx.font = '600 24px sans-serif';
+        ctx.fillStyle = isVictory ? '#A78BFA' : '#F87171';
+        ctx.fillText(isVictory ? '🏆 CHALLENGE COMPLETED!' : '💀 EVOLUTION HALTED', W / 2, 130);
+
+        // Skor büyük gösterim
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 72px sans-serif';
+        ctx.fillText(String(score), W / 2, 240);
+        ctx.font = '500 18px sans-serif';
+        ctx.fillStyle = '#a1a1aa';
+        ctx.fillText(t.finalScore?.toUpperCase() || 'FINAL SCORE', W / 2, 275);
+
+        // İstatistik kartları çizim fonksiyonu
+        const drawStatCard = (x: number, y: number, w: number, h: number, label: string, value: string, color: string) => {
+           // Kart arka planı
+           ctx.fillStyle = 'rgba(255,255,255,0.04)';
+           ctx.beginPath();
+           ctx.roundRect(x, y, w, h, 16);
+           ctx.fill();
+
+           // Kart kenarı
+           ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+           ctx.lineWidth = 1;
+           ctx.beginPath();
+           ctx.roundRect(x, y, w, h, 16);
+           ctx.stroke();
+
+           // Değer
+           ctx.fillStyle = color;
+           ctx.font = 'bold 36px sans-serif';
+           ctx.textAlign = 'center';
+           ctx.fillText(value, x + w / 2, y + 50);
+
+           // Etiket
+           ctx.fillStyle = '#a1a1aa';
+           ctx.font = '500 14px sans-serif';
+           ctx.fillText(label, x + w / 2, y + 78);
+        };
+
+        const cardW = 300;
+        const cardH = 100;
+        const gapX = 40;
+        const startX = (W - cardW * 2 - gapX) / 2;
+        let row = 0;
+
+        const stats = [
+           { label: (t.largestBlock || 'MAX BLOCK').toUpperCase(), value: String(gameOverStats?.maxBlock || maxBlock), color: '#C084FC' },
+           { label: (t.totalMoves || 'MOVES').toUpperCase(), value: String(gameOverStats?.finalMoves || moves), color: '#60A5FA' },
+           { label: (t.evolutionLevel || 'LEVEL').toUpperCase(), value: String(gameOverStats?.finalLevel || levelInfo.level), color: '#34D399' },
+           { label: (t.longestCombo || 'BEST COMBO').toUpperCase(), value: String(gameOverStats?.longestCombo || 0), color: '#FBBF24' },
+        ];
+
+        const startY = 320;
+        const gapY = 24;
+
+        stats.forEach((s, i) => {
+           const col = i % 2;
+           row = Math.floor(i / 2);
+           const x = startX + col * (cardW + gapX);
+           const y = startY + row * (cardH + gapY);
+           drawStatCard(x, y, cardW, cardH, s.label, s.value, s.color);
+        });
+
+        // Verimlilik kartı (tam genişlik)
+        const effY = startY + (row + 1) * (cardH + gapY);
+        const efficiency = gameOverStats?.finalMoves ? Math.round(score / gameOverStats.finalMoves) : 0;
+        drawStatCard(startX, effY, cardW * 2 + gapX, cardH, (t.efficiency || 'EFFICIENCY').toUpperCase(), String(efficiency) + ' pts/move', '#F472B6');
+
+        // Yeni rekor rozeti
+        if (gameOverStats?.isNewRecord) {
+           ctx.fillStyle = '#FBBF24';
+           ctx.font = 'bold 22px sans-serif';
+           ctx.textAlign = 'center';
+           ctx.fillText('⭐ ' + (t.newRecord || 'NEW RECORD!') + ' ⭐', W / 2, effY + cardH + 50);
+        }
+
+        // Alt bilgi
+        ctx.fillStyle = '#525252';
+        ctx.font = '400 16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('play.google.com/store/apps/details?id=com.dinzdp.gridevolution', W / 2, H - 30);
+
+        // Canvas'ı base64 JPEG'e çevir
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        const base64Data = dataUrl.split(',')[1];
+
+        // Capacitor Filesystem ile cihaza kaydet
+        const fileName = `grid_evo_${Date.now()}.jpg`;
+        const savedFile = await Filesystem.writeFile({
+           path: fileName,
+           data: base64Data,
+           directory: Directory.Cache
+        });
+
+        // Capacitor Share ile paylaşım çekmecesini aç
+        await Share.share({
+           title: 'Grid Evolution',
+           text: `Grid Evolution! Score: ${score}`,
+           url: savedFile.uri,
+           dialogTitle: t.shareResults
+        });
+
+     } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (msg.includes('cancel') || msg.includes('dismiss') || msg.includes('abort')) return;
+        alert('Paylaşım hatası: ' + msg);
+     }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -3136,14 +3301,18 @@ export default function App() {
 
   const tileSizePercent = useMemo(() => `calc((100% - ${(gridSize - 1) * 12}px) / ${gridSize})`, [gridSize]);
 
+  // Removed old handleShareScreenshot definition
+
   return (
-    <div className="app-container relative w-full h-full">
+    <div className="app-container relative w-full h-full" style={{ paddingTop: SAFE_TOP }}>
       {gameMode === null && (
-        <button 
+        <button
+          aria-label={t.settings || "Settings"}
           onClick={() => setIsSettingsOpen(true)}
-          className="absolute top-6 right-6 z-[999] p-2 text-neutral-400 hover:text-white transition-colors pointer-events-auto"
+          className="absolute right-6 z-[999] p-2 text-neutral-400 hover:text-white transition-colors pointer-events-auto"
+          style={{ top: SAFE_INSET_SUPPORTED ? `calc(1.5rem + ${SAFE_TOP})` : '1.5rem' }}
         >
-          <SettingsIcon size={24} />
+          <SettingsIcon size={24} aria-hidden="true" />
         </button>
       )}
 
@@ -3153,36 +3322,41 @@ export default function App() {
           <motion.div
              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
              className={`absolute inset-0 z-[60] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/80 backdrop-blur-md'} flex flex-col items-center justify-center p-6`}
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="settings-title"
           >
             <div className="bg-[#050505] rounded-3xl w-full max-w-[320px] p-6 shadow-2xl border border-white/5 relative">
-               <button onClick={() => setIsSettingsOpen(false)} className="absolute top-5 right-5 text-white/40 hover:text-white transition-colors">
-                 <X size={20}/>
+               <button aria-label="Close settings" onClick={() => setIsSettingsOpen(false)} className="absolute top-5 right-5 text-white/60 hover:text-white transition-colors">
+                 <X size={20} aria-hidden="true" />
                </button>
-               <h3 className="text-lg font-light tracking-[0.2em] text-center mb-8 mt-2 uppercase">{t.settings}</h3>
+               <h3 id="settings-title" className="text-lg font-light tracking-[0.2em] text-center mb-8 mt-2 uppercase">{t.settings}</h3>
                
                <div className="flex justify-between items-center mb-6 px-2">
-                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Volume2 size={18}/> {t.sound}</span>
-                  <button onClick={() => setSoundEnabled(!soundEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${soundEnabled ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
-                     <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${soundEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
+                  <span className="font-light tracking-wide text-white/90 flex items-center gap-3"><Volume2 size={18} aria-hidden="true"/> {t.sound}</span>
+                  <button role="switch" aria-checked={soundEnabled} aria-label={t.sound} onClick={() => setSoundEnabled(!soundEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${soundEnabled ? 'bg-[#D7CCC8]' : 'bg-white/20'}`}>
+                     <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${soundEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/70'}`} />
                   </button>
                </div>
                
                <div className="flex justify-between items-center mb-8 px-2">
-                  <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Vibrate size={18}/> {t.haptics}</span>
-                  <button onClick={() => setHapticsEnabled(!hapticsEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${hapticsEnabled ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
-                     <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${hapticsEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
+                  <span className="font-light tracking-wide text-white/90 flex items-center gap-3"><Vibrate size={18} aria-hidden="true"/> {t.haptics}</span>
+                  <button role="switch" aria-checked={hapticsEnabled} aria-label={t.haptics} onClick={() => setHapticsEnabled(!hapticsEnabled)} className={`w-12 h-6 rounded-full relative transition-colors ${hapticsEnabled ? 'bg-[#D7CCC8]' : 'bg-white/20'}`}>
+                     <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${hapticsEnabled ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/70'}`} />
                   </button>
                </div>
 
                 <div className="flex justify-between items-center mb-8 px-2">
-                   <span className="font-light tracking-wide opacity-80 flex items-center gap-3">
-                      <Grid size={18} />
+                   <label htmlFor="lang-select" className="font-light tracking-wide text-white/90 flex items-center gap-3">
+                      <Grid size={18} aria-hidden="true" />
                       {t.language}
-                   </span>
+                   </label>
                    <select
+                      id="lang-select"
+                      aria-label={t.language}
                       value={currentLang}
                       onChange={(e) => setCurrentLang(e.target.value)}
-                      className="bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs font-light tracking-wide text-white/80 focus:outline-none focus:ring-1 focus:ring-[#06B6D4] cursor-pointer"
+                      className="bg-white/10 border border-white/20 rounded-xl px-3 py-1.5 text-xs font-light tracking-wide text-white focus:outline-none focus:ring-2 focus:ring-[#06B6D4] cursor-pointer"
                    >
                       <option value="en" className="bg-[#050505] text-white">English</option>
                       <option value="tr" className="bg-[#050505] text-white">Türkçe</option>
@@ -3200,25 +3374,25 @@ export default function App() {
                 </div>
 
                <div className="flex justify-between items-center mb-8 px-2">
-                   <span className="font-light tracking-wide opacity-80 flex items-center gap-3"><Zap size={18}/> {t.reduceEffects}</span>
-                   <button onClick={() => setLowPerformanceMode(!lowPerformanceMode)} className={`w-12 h-6 rounded-full relative transition-colors ${lowPerformanceMode ? 'bg-[#D7CCC8]' : 'bg-white/10'}`}>
-                      <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${lowPerformanceMode ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/50'}`} />
+                   <span className="font-light tracking-wide text-white/90 flex items-center gap-3"><Zap size={18} aria-hidden="true"/> {t.reduceEffects}</span>
+                   <button role="switch" aria-checked={lowPerformanceMode} aria-label={t.reduceEffects} onClick={() => setLowPerformanceMode(!lowPerformanceMode)} className={`w-12 h-6 rounded-full relative transition-colors ${lowPerformanceMode ? 'bg-[#D7CCC8]' : 'bg-white/20'}`}>
+                      <span className={`absolute top-1 w-4 h-4 rounded-full transition-all ${lowPerformanceMode ? 'left-7 bg-[#5D4037]' : 'left-1 bg-white/70'}`} />
                    </button>
                 </div>
 
-               <div className="border-t border-white/5 pt-6 mt-2 flex flex-col gap-3">
+               <div className="border-t border-white/20 pt-6 mt-2 flex flex-col gap-3">
                   <button 
                      onClick={() => {
                         setIsSettingsOpen(false);
                         setShowInfoModal(true);
                         setInfoStep(1);
                      }}
-                     className={`w-full py-3.5 rounded-xl bg-white/5 text-white/90 font-light text-xs hover:bg-white/10 transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}
+                     className={`w-full py-3.5 rounded-xl bg-white/10 text-white font-light text-xs hover:bg-white/20 focus:ring-2 focus:ring-[#06B6D4] transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}
                   >
                      {t.howToPlay}
                   </button>
                   {!showResetConfirm ? (
-                     <button onClick={() => setShowResetConfirm(true)} className={`w-full py-3.5 rounded-xl bg-red-500/10 text-red-400 font-light text-xs hover:bg-red-500/20 transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}>{t.resetProgress}</button>
+                     <button onClick={() => setShowResetConfirm(true)} className={`w-full py-3.5 rounded-xl bg-red-500/20 text-red-300 font-light text-xs hover:bg-red-500/30 focus:ring-2 focus:ring-red-400 transition-colors uppercase ${getTracking("tracking-[0.15em]", "tracking-wide")}`}>{t.resetProgress}</button>
                   ) : (
                      <div className="flex flex-col gap-3">
                          <span className="text-center text-xs text-red-400 font-light tracking-widest flex items-center justify-center gap-2">
@@ -3240,6 +3414,9 @@ export default function App() {
           <motion.div
              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
              className={`absolute inset-0 z-[70] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/80 backdrop-blur-md'} flex flex-col items-center justify-center p-6`}
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="info-title"
           >
              <div className="bg-[#050505] rounded-3xl w-full max-w-[320px] p-8 shadow-2xl border border-white/5 relative flex flex-col items-center text-center">
                 
@@ -3252,7 +3429,7 @@ export default function App() {
                          <div className="text-white/50 animate-pulse text-xl ml-1 mr-1">=</div>
                          <div className="w-12 h-12 bg-[#DCEDC8] text-[#33691E] rounded-xl flex items-center justify-center text-xl font-bold shadow-[0_0_15px_rgba(220,237,200,0.4)]">4</div>
                      </div>
-                     <h3 className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">{t.step1Title}</h3>
+                     <h3 id="info-title" className="text-lg font-thin tracking-[0.1em] mb-4 text-white uppercase">{t.step1Title}</h3>
                      <p className="text-white/80 font-extralight text-sm leading-relaxed tracking-wide">
                         {t.step1Desc}
                      </p>
@@ -3339,15 +3516,18 @@ export default function App() {
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className={`absolute inset-0 z-[100] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/90 backdrop-blur-lg'} flex flex-col items-center justify-center p-6`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="exit-title"
           >
             <motion.div
               initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
               className="bg-[#050505] rounded-[2.5rem] w-full max-w-[320px] p-8 shadow-2xl border border-white/5 text-center"
             >
               <div className="w-16 h-16 bg-red-400/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                <AlertTriangle size={32} className="text-red-400" />
+                <AlertTriangle size={32} className="text-red-400" aria-hidden="true" />
               </div>
-              <h2 className={`text-xl font-light mb-3 text-white uppercase ${getTracking("tracking-[0.2em]", "tracking-wide")}`}>{t.wait}</h2>
+              <h2 id="exit-title" className={`text-xl font-light mb-3 text-white uppercase ${getTracking("tracking-[0.2em]", "tracking-wide")}`}>{t.wait}</h2>
               <p className={`text-xs text-white/40 font-light leading-relaxed mb-8 ${getTracking("tracking-widest", "tracking-normal")}`}>
                 {t.areYouSureExit}
               </p>
@@ -3377,21 +3557,66 @@ export default function App() {
         )}
       </AnimatePresence>
       <AnimatePresence>
+        {showRestartConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className={`absolute inset-0 z-[100] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/90 backdrop-blur-lg'} flex flex-col items-center justify-center p-6`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="restart-title"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
+              className="bg-[#050505] rounded-[2.5rem] w-full max-w-[320px] p-8 shadow-2xl border border-white/5 text-center"
+            >
+              <div className="w-16 h-16 bg-red-400/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <AlertTriangle size={32} className="text-red-400" aria-hidden="true" />
+              </div>
+              <h2 id="restart-title" className={`text-xl font-light mb-3 text-white uppercase ${getTracking("tracking-[0.2em]", "tracking-wide")}`}>{t.restartConfirmTitle}</h2>
+              <p className={`text-xs text-white/40 font-light leading-relaxed mb-8 ${getTracking("tracking-widest", "tracking-normal")}`}>
+                {t.restartConfirmText}
+              </p>
+
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => {
+                    setShowRestartConfirm(false);
+                    initializeGame(gameMode || undefined, challengeLevel);
+                  }}
+                  className={`w-full py-4 bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                >
+                  {t.retry}
+                </button>
+                <button
+                  onClick={() => setShowRestartConfirm(false)}
+                  className={`w-full py-4 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                >
+                  {t.keepPlaying}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
         {showRecoveryModal && (
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className={`absolute inset-0 z-[100] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#121212]/90 backdrop-blur-lg'} flex flex-col items-center justify-center p-6`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="recovery-title"
           >
             <motion.div
               initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
               className="bg-[#050505] rounded-[2.5rem] w-full max-w-[320px] p-8 shadow-2xl border border-white/5 text-center"
             >
               <div className="w-16 h-16 bg-[#A2D2FF]/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                <RotateCcw size={32} className="text-[#A2D2FF]" />
+                <RotateCcw size={32} className="text-[#A2D2FF]" aria-hidden="true" />
               </div>
-              <h2 className="text-xl font-light tracking-[0.2em] mb-3 uppercase">{t.welcomeBack}</h2>
+              <h2 id="recovery-title" className="text-xl font-light tracking-[0.2em] mb-3 uppercase">{t.welcomeBack}</h2>
               <p 
-                className="text-xs text-white/40 font-light tracking-widest leading-relaxed mb-8"
+                className="text-xs text-white/60 font-light tracking-widest leading-relaxed mb-8"
                 dangerouslySetInnerHTML={{ __html: t.recoveryText }}
               />
 
@@ -3420,7 +3645,14 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.6 }}
-            className={`fixed inset-0 z-[200] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#050505]/80 backdrop-blur-xl'} flex flex-col items-center justify-between py-12 px-6`}
+            className={`fixed inset-0 z-[200] ${lowPerformanceMode ? 'bg-black/95' : 'bg-[#050505]/80 backdrop-blur-xl'} flex flex-col items-center justify-between px-6 overflow-y-auto`}
+            style={{
+              paddingTop: SAFE_INSET_SUPPORTED ? `calc(3rem + ${SAFE_TOP})` : '3rem',
+              paddingBottom: SAFE_INSET_SUPPORTED ? `calc(3rem + ${SAFE_BOTTOM})` : '3rem'
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="gameover-title"
           >
             {/* Header */}
             <motion.div 
@@ -3429,13 +3661,13 @@ export default function App() {
                transition={{ delay: 0.2, duration: 0.8 }}
                className="mt-8 text-center"
             >
-               <h1 className={`text-xl md:text-2xl font-black text-[#6366F1] uppercase [text-shadow:0_0_15px_rgba(99,102,241,0.5)] ${getTracking("tracking-[0.3em]", "tracking-wider")}`}>
+               <h1 id="gameover-title" className={`text-xl md:text-2xl font-black text-[#6366F1] uppercase [text-shadow:0_0_15px_rgba(99,102,241,0.5)] ${getTracking("tracking-[0.3em]", "tracking-wider")}`}>
                  {gameOverStats.isVictory ? t.challengeWin : (gameMode === 'moveLimit' && movesLeft <= 0) ? t.outOfMoves : t.evolutionHalted}
                </h1>
             </motion.div>
 
             {/* Main Score & Stats */}
-            <div className="flex flex-col items-center justify-center flex-1 w-full max-w-md gap-10">
+             <div ref={statsContainerRef} id="stats-board-capture" className="flex flex-col items-center justify-center flex-1 w-full max-w-md gap-5 sm:gap-10">
                <motion.div 
                  initial={{ scale: 0.8, opacity: 0 }}
                  animate={{ scale: 1, opacity: 1 }}
@@ -3468,25 +3700,25 @@ export default function App() {
                  className="grid grid-cols-2 gap-2.5 sm:gap-4 w-full px-2"
                >
                   <div className="bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-[#FFE082]/70 uppercase">{t.largestBlock}</span>
-                     <span className="text-xl font-light text-white">{gameOverStats.maxBlock}</span>
+                     <span className="text-xs sm:text-sm tracking-widest text-neutral-200/90 font-medium uppercase">{t.largestBlock}</span>
+                     <span className="text-2xl sm:text-3xl font-normal text-white">{gameOverStats.maxBlock}</span>
                   </div>
                   <div className="bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-white/40 uppercase">{t.totalMoves}</span>
-                     <span className="text-xl font-light text-white">{gameOverStats.finalMoves}</span>
+                     <span className="text-xs sm:text-sm tracking-widest text-neutral-200/90 font-medium uppercase">{t.totalMoves}</span>
+                     <span className="text-2xl sm:text-3xl font-normal text-white">{gameOverStats.finalMoves}</span>
                   </div>
                   <div className="bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-white/40 uppercase">{t.efficiency}</span>
-                     <span className="text-xl font-light text-white">{gameOverStats.finalMoves > 0 ? (score / gameOverStats.finalMoves).toFixed(1) : 0}</span>
+                     <span className="text-xs sm:text-sm tracking-widest text-neutral-200/90 font-medium uppercase">{t.efficiency}</span>
+                     <span className="text-2xl sm:text-3xl font-normal text-white">{gameOverStats.finalMoves > 0 ? (score / gameOverStats.finalMoves).toFixed(1) : 0}</span>
                   </div>
                   <div className="bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
-                     <span className="text-[10px] tracking-widest text-white/40 uppercase">{t.longestCombo}</span>
-                     <span className="text-xl font-light text-white tracking-wider">{gameOverStats.longestCombo}</span>
+                     <span className="text-xs sm:text-sm tracking-widest text-neutral-200/90 font-medium uppercase">{t.longestCombo}</span>
+                     <span className="text-2xl sm:text-3xl font-normal text-white tracking-wider">{gameOverStats.longestCombo}</span>
                   </div>
                   {gameMode !== 'moveLimit' && (
                       <div className="col-span-2 bg-white/5 border border-white/5 rounded-2xl p-2.5 sm:p-4 flex flex-col gap-0.5 sm:gap-1 items-center justify-center">
-                         <span className="text-[10px] tracking-widest text-[#6366F1]/70 uppercase">{t.evolutionLevel}</span>
-                         <span className="text-xl font-light text-white">{gameOverStats.finalLevel}</span>
+                         <span className="text-xs sm:text-sm tracking-widest text-neutral-200/90 font-medium uppercase">{t.evolutionLevel}</span>
+                         <span className="text-2xl sm:text-3xl font-normal text-white">{gameOverStats.finalLevel}</span>
                       </div>
                   )}
                </motion.div>
@@ -3497,10 +3729,11 @@ export default function App() {
                initial={{ y: 30, opacity: 0 }}
                animate={{ y: 0, opacity: 1 }}
                transition={{ delay: 0.8, duration: 0.6 }}
-               className="w-full max-w-md flex flex-col gap-4 mt-8 mb-4"
+               className="w-full max-w-md flex flex-col gap-3 sm:gap-4 mt-5 sm:mt-8 mb-4 shrink-0"
             >
                {gameOverStats?.isVictory && challengeLevel < 105 && gameMode === 'moveLimit' ? (
                  <button 
+                    aria-label={t.nextStage}
                     onClick={() => {
                       const nextLvl = challengeLevel + 1;
                       setChallengeLevel(nextLvl);
@@ -3509,19 +3742,21 @@ export default function App() {
                       setGameOverStats(null);
                       initializeGame('moveLimit', nextLvl);
                     }} 
-                    className={`w-full py-4 bg-teal-500 text-black hover:bg-teal-400 rounded-2xl text-xs sm:text-sm font-medium uppercase transition-all shadow-[0_0_20px_rgba(45,212,191,0.3)] flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                    className={`w-full py-4 bg-teal-500 text-black hover:bg-teal-400 rounded-2xl text-sm sm:text-base font-medium uppercase transition-all shadow-[0_0_20px_rgba(45,212,191,0.3)] flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                  >
                     {t.nextStage}
                  </button>
                ) : (
                  <button 
+                    aria-label={t.retry}
                     onClick={() => initializeGame(gameMode || undefined, challengeLevel)} 
-                    className={`w-full py-4 bg-white text-black hover:bg-white/90 rounded-2xl text-xs sm:text-sm font-light uppercase transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                    className={`w-full py-4 bg-white text-black hover:bg-white/90 rounded-2xl text-sm sm:text-base font-medium uppercase transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                  >
                     <RotateCcw size={18} strokeWidth={1.5} /> {t.retry}
                  </button>
                )}
                <button 
+                   aria-label={t.returnToTree}
                    onClick={() => {
                      setGameOver(false);
                      setGameOverStats(null);
@@ -3533,7 +3768,7 @@ export default function App() {
                        setGameMode(null);
                      }
                    }}
-                  className={`w-full py-4 bg-transparent border border-white/10 text-white/80 hover:text-white hover:bg-white/5 rounded-2xl text-xs sm:text-sm font-light uppercase transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                  className={`w-full py-4 bg-transparent border border-white/10 text-white/80 hover:text-white hover:bg-white/5 rounded-2xl text-sm sm:text-base font-medium uppercase transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                >
                   {gameMode === 'moveLimit' ? (
                      <>🗺️ {t.returnToTree}</>
@@ -3543,15 +3778,7 @@ export default function App() {
                </button>
                {gameMode !== 'moveLimit' && (
                <button 
-                  onClick={() => {
-                     const text = t.shareMessage
-                        .replace('{level}', String(gameOverStats.finalLevel))
-                        .replace('{score}', String(score))
-                        .replace('{maxBlock}', String(gameOverStats.maxBlock))
-                        .replace('{moves}', String(gameOverStats.finalMoves));
-                     if (navigator.share) navigator.share({ title: 'Grid Evolution Stats', text }).catch(err=>console.log(err));
-                     else { navigator.clipboard.writeText(text); alert('Stats copied to clipboard!'); }
-                  }}
+                  onClick={handleShareScreenshot}
                   className={`w-full py-4 bg-transparent border border-white/10 text-white/80 hover:text-white hover:bg-white/5 rounded-2xl text-xs sm:text-sm font-light uppercase transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                >
                   <Share2 size={16} strokeWidth={1.5} /> {t.shareResults}
@@ -3606,7 +3833,7 @@ export default function App() {
         </motion.p>
       </div>
       ) : gameMode === null ? (
-<div className={`h-screen w-full flex flex-col items-center justify-center font-sans select-none relative overflow-hidden ${lowPerformanceMode ? 'bg-[#1E1E1E]' : 'bg-[#121212]'}`}>
+<div className={`h-screen w-full flex flex-col items-center justify-center font-sans select-none relative overflow-hidden ${lowPerformanceMode ? 'bg-[#1E1E1E]' : 'bg-[#121212]'}`} style={{ height: SAFE_SCREEN_HEIGHT }}>
                <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -3649,7 +3876,7 @@ export default function App() {
          </motion.div>
       </div>
       ) : gameMode === 'moveLimit' && isViewingChallengeTree ? (
-       <div className={`h-screen w-full flex flex-col items-center justify-center bg-[#121212] font-sans select-none relative p-6`}>
+       <div className={`h-screen w-full flex flex-col items-center justify-center bg-[#121212] font-sans select-none relative p-6`} style={{ height: SAFE_SCREEN_HEIGHT }}>
           <button onClick={() => { setGameMode(null); setIsViewingChallengeTree(false); }} className="absolute top-6 left-6 text-white/50 hover:text-white flex items-center gap-2 text-xs uppercase tracking-widest">← {t.backWord}</button>
           
           <h2 className="text-2xl font-light tracking-[0.2em] mb-2 text-center uppercase">{t.challengeMode}</h2>
@@ -3738,6 +3965,7 @@ export default function App() {
       transition={{ duration: 0.8, ease: "easeOut" }}
       className="h-screen w-full flex flex-col items-center font-sans text-white overflow-hidden relative overscroll-none select-none"
       style={{
+          height: SAFE_SCREEN_HEIGHT,
           paddingTop: '1.5rem',
           paddingBottom: '1.5rem'
       }}
@@ -3855,7 +4083,7 @@ export default function App() {
             <Controls
               undoCount={powerUps.undo} canUndo={history.length > 0}
               hammerCharge={hammerCharge} shuffleCount={powerUps.shuffle}
-              onUndo={handleUndo} onClear={handleClear} onShuffle={handleShuffle} onReset={initializeGame}
+              onUndo={handleUndo} onClear={handleClear} onShuffle={handleShuffle} onReset={() => setShowRestartConfirm(true)}
               isHammerActive={isHammerActive}
             />
         </div>
@@ -3961,16 +4189,19 @@ export default function App() {
           <motion.div
              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
              className="fixed inset-0 z-[300] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="rate-title"
           >
              <motion.div
                 initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
                 className="bg-[#050505] rounded-[2.5rem] w-full max-w-[320px] p-8 shadow-2xl border border-white/5 text-center relative"
              >
-                <div className="w-16 h-16 bg-[#FFE082]/10 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#FFE082]/20">
+                <div className="w-16 h-16 bg-[#FFE082]/10 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-[#FFE082]/20" aria-hidden="true">
                    <span className="text-2xl animate-pulse">⭐️</span>
                 </div>
-                <h2 className={`text-lg font-light mb-3 text-white uppercase ${getTracking("tracking-[0.2em]", "tracking-wide")}`}>{t.rateTitle}</h2>
-                <p className="text-xs text-white/50 font-extralight leading-relaxed mb-8 px-2">
+                <h2 id="rate-title" className={`text-2xl sm:text-3xl font-bold mb-4 tracking-wide text-white uppercase ${getTracking("tracking-[0.2em]", "tracking-wide")}`}>{t.rateTitle}</h2>
+                <p className="text-base sm:text-lg text-neutral-200 font-normal leading-relaxed mb-8 px-2">
                    {t.rateDesc}
                 </p>
                 <div className="flex flex-col gap-3">
@@ -3982,7 +4213,7 @@ export default function App() {
                             window.location.href = "market://details?id=com.dinzdp.gridevolution";
                          }
                       }}
-                      className={`w-full py-4 bg-gradient-to-r from-purple-600/30 to-pink-600/30 text-white border border-pink-500/30 hover:border-pink-500/60 rounded-2xl text-xs uppercase font-medium transition-all shadow-[0_0_15px_rgba(236,72,153,0.2)] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                      className={`w-full py-4 bg-gradient-to-r from-purple-600/30 to-pink-600/30 text-white border border-pink-500/30 hover:border-pink-500/60 rounded-2xl text-sm sm:text-base font-semibold tracking-widest uppercase transition-all shadow-[0_0_15px_rgba(236,72,153,0.2)] ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                    >
                       🚀 {t.rateBtn}
                    </button>
@@ -3991,7 +4222,7 @@ export default function App() {
                          localStorage.setItem('grid-evo-already-rated', 'true');
                          setShowRateModal(false);
                       }}
-                      className={`w-full py-4 bg-white/5 text-white/40 hover:text-white/60 rounded-2xl text-xs uppercase font-light transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
+                      className={`w-full py-4 bg-white/5 text-white/60 hover:text-white/80 rounded-2xl text-sm sm:text-base font-semibold tracking-widest uppercase transition-colors ${getTracking("tracking-[0.2em]", "tracking-wide")}`}
                    >
                       {t.rateLater}
                    </button>
